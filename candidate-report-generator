@@ -1,0 +1,212 @@
+import React, { useState } from 'react';
+import { Upload, FileText } from 'lucide-react';
+import Papa from 'papaparse';
+import _ from 'lodash';
+
+const CandidateReportGenerator = () => {
+  const [candidates, setCandidates] = useState([]);
+  const [resumes, setResumes] = useState({});
+  const [generatedReport, setGeneratedReport] = useState('');
+
+  const determineMatchScore = (interviewData) => {
+    const {
+      preparedness_score,
+      values_alignment_score,
+      language_proficiency_score,
+      relevant_experience_years,
+      final_recommendation
+    } = interviewData;
+
+    // Base score calculation with weights
+    let score = (
+      (preparedness_score * 0.25) +
+      (values_alignment_score * 0.35) +
+      (language_proficiency_score * 0.2) +
+      (Math.min(relevant_experience_years, 10) / 10 * 10 * 0.2)
+    );
+
+    // Adjust based on final recommendation
+    score = final_recommendation ? score : Math.min(score, 7);
+
+    return Math.round(score);
+  };
+
+  const handleCSVUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    try {
+      const content = await file.text();
+      Papa.parse(content, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const processedData = results.data.map(row => ({
+            ...row,
+            interviewData: typeof row.interviewData === 'string' ? 
+              JSON.parse(row.interviewData) : row.interviewData
+          }));
+          setCandidates(processedData);
+          generateReport(processedData, resumes);
+        }
+      });
+    } catch (error) {
+      console.error('Error processing CSV:', error);
+    }
+  };
+
+  const handleResumeUpload = async (event) => {
+    const files = event.target.files;
+    if (!files.length) return;
+    
+    const newResumes = { ...resumes };
+    
+    for (let file of files) {
+      try {
+        const text = await file.text();
+        const candidateName = file.name.replace('.pdf', '').trim();
+        newResumes[candidateName] = text;
+      } catch (error) {
+        console.error('Error processing PDF:', error);
+      }
+    }
+    
+    setResumes(newResumes);
+    if (candidates.length) {
+      generateReport(candidates, newResumes);
+    }
+  };
+
+  const generateCandidateNote = (interviewData, resume) => {
+    let note = '';
+    
+    // Experience and skills summary
+    note += `Strong background in ${interviewData.key_skills_mentioned.slice(0, 3).join(', ')}. `;
+    
+    // Experience details
+    note += interviewData.additional_experience_shared + ' ';
+    
+    // Technical assessment
+    if (interviewData.preparedness_score >= 8) {
+      note += 'Demonstrated excellent technical knowledge during the interview. ';
+    } else if (interviewData.preparedness_score >= 6) {
+      note += 'Showed solid technical capabilities. ';
+    }
+
+    // Values and culture fit
+    if (interviewData.values_alignment_score >= 8) {
+      note += 'Strong alignment with company values and culture. ';
+    }
+
+    // Communication skills
+    if (interviewData.language_proficiency_score >= 8) {
+      note += 'Excellent communication skills. ';
+    } else if (interviewData.language_proficiency_score >= 6) {
+      note += 'Good communication abilities. ';
+    }
+
+    return note.trim();
+  };
+
+  const generateReport = (candidatesData, resumesData) => {
+    if (!candidatesData.length) return;
+    
+    let report = `# **CANDIDATE PROPOSAL**\n\n`;
+    
+    const firstCandidate = candidatesData[0];
+    report += `**ROLE:** WordPress Developer\n`;
+    report += `**COMPANY:** Heidi\n\n`;
+    
+    // Sort candidates by overall score
+    const sortedCandidates = _.orderBy(candidatesData, 
+      [c => determineMatchScore(c.interviewData)], 
+      ['desc']
+    );
+    
+    sortedCandidates.forEach(candidate => {
+      const interviewData = candidate.interviewData;
+      const resume = resumesData[candidate.Name];
+      
+      report += `### **${candidate.Name}**\n\n`;
+      report += `**Experience**\n\n`;
+      report += `* **Years experience**: ${interviewData.relevant_experience_years} years\n`;
+      report += `  * **Valuable experience**: ${interviewData.additional_experience_shared}\n`;
+      report += `  * **Do they have the values?** Yes. Values alignment score: ${interviewData.values_alignment_score}/10\n`;
+      report += `  * **English Level -** ${interviewData.language_proficiency_score}/10\n\n`;
+      
+      report += `  **Logistics**\n\n`;
+      report += `  * What's their compensation request? — TBD\n`;
+      report += `  * When can they start? — Immediate availability\n\n`;
+      
+      const score = determineMatchScore(interviewData);
+      report += `**TalentHQ Match Scoring: ${score}/10**\n\n`;
+      
+      report += `**Note:**\n\n`;
+      report += generateCandidateNote(interviewData, resume) + '\n\n';
+      
+      if (resume) {
+        report += `[Test](Test)\n`;
+        report += `[Interview](Interview)\n`;
+        report += `[Resume](Resume)\n\n`;
+      }
+      
+      report += `\n---\n\n`;
+    });
+    
+    setGeneratedReport(report);
+  };
+
+  return (
+    <div className="w-full max-w-4xl mx-auto p-6">
+      <div className="mb-8 space-y-6">
+        <h2 className="text-2xl font-bold">Candidate Report Generator</h2>
+        
+        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+          <label className="cursor-pointer block">
+            <input 
+              type="file" 
+              accept=".csv"
+              onChange={handleCSVUpload}
+              className="hidden" 
+            />
+            <div className="flex flex-col items-center">
+              <FileText className="h-12 w-12 text-gray-400 mb-2" />
+              <span className="text-sm text-gray-600">
+                Upload Candidate Data (CSV)
+              </span>
+            </div>
+          </label>
+        </div>
+        
+        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+          <label className="cursor-pointer block">
+            <input 
+              type="file" 
+              accept=".pdf"
+              multiple
+              onChange={handleResumeUpload}
+              className="hidden" 
+            />
+            <div className="flex flex-col items-center">
+              <Upload className="h-12 w-12 text-gray-400 mb-2" />
+              <span className="text-sm text-gray-600">
+                Upload Resumes (PDF)
+              </span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      {generatedReport && (
+        <div className="mt-8">
+          <h3 className="text-xl font-semibold mb-4">Generated Report</h3>
+          <div className="bg-gray-50 p-6 rounded-lg">
+            <pre className="whitespace-pre-wrap">{generatedReport}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CandidateReportGenerator;
