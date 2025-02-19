@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Upload, FileText, Briefcase, Users, AlertCircle, X, Loader2, Table, CheckCircle2 } from 'lucide-react';
 import { generateCandidateReport } from './lib/anthropic';
 
+console.log('App component loaded')
+
 interface FileUpload {
   file: File;
   type: 'csv' | 'job-description' | 'resume';
@@ -15,7 +17,7 @@ interface ApiError {
   code?: string;
 }
 
-function App() {
+function App(): JSX.Element {
   const [files, setFiles] = useState<FileUpload[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [apiError, setApiError] = useState<ApiError | null>(null);
