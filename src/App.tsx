@@ -39,8 +39,39 @@ function App(): JSX.Element {
     const filesWithContent = await Promise.all(
       newFiles.map(async (fileUpload) => {
         try {
-          const content = await fileUpload.file.text();
-          return { ...fileUpload, content, status: 'success' as const };
+          if (fileUpload.type === 'csv') {
+            // Handle CSV files as text
+            const content = await fileUpload.file.text();
+            return { ...fileUpload, content, status: 'success' as const };
+          } else {
+            // Handle PDF files with proper base64 encoding
+            const content = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                // Get the base64 data without the data URL prefix
+                const base64String = (reader.result as string)
+                  .replace(/^data:application\/pdf;base64,/, '');
+                
+                // Ensure it's a valid base64 string (ASCII only)
+                try {
+                  // Convert to Uint8Array and back to ensure proper encoding
+                  const binary = atob(base64String);
+                  const bytes = new Uint8Array(binary.length);
+                  for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                  }
+                  // Re-encode to base64
+                  const validBase64 = btoa(String.fromCharCode(...bytes));
+                  resolve(validBase64);
+                } catch (error) {
+                  reject(new Error('Invalid PDF format'));
+                }
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(fileUpload.file);
+            });
+            return { ...fileUpload, content, status: 'success' as const };
+          }
         } catch (error) {
           return {
             ...fileUpload,
