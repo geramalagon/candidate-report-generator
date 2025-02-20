@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Upload, FileText, Briefcase, Users, AlertCircle, X, Loader2, Table, CheckCircle2 } from 'lucide-react';
-import { generateCandidateReport } from './lib/anthropic';
+import { generateCandidateReport } from './lib/api';
 
 console.log('App component loaded')
 

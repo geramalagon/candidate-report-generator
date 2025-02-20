@@ -17,11 +17,12 @@ export async function generateCandidateReport(
     });
 
     if (!response.ok) {
-      throw new Error('Failed to generate report');
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || 'Failed to generate report');
     }
 
     const data = await response.json();
-    return data.result;
+    return data.data;
   } catch (error) {
     console.error('Error generating report:', error);
     throw error;
