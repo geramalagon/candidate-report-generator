@@ -50,7 +50,7 @@ export async function generateContent(prompt: string) {
       throw new Error('Failed to get access token');
     }
 
-    const endpoint = `https://${config.google.location}-aiplatform.googleapis.com/v1/projects/${config.google.projectId}/locations/${config.google.location}/publishers/google/models/gemini-2.0-flash-lite-preview-02-05:generateContent`;
+    const endpoint = `https://${config.google.location}-aiplatform.googleapis.com/v1/projects/${config.google.projectId}/locations/${config.google.location}/publishers/google/models/gemini-2.0-flash:generateContent`;
     
     const response = await fetch(endpoint, {
       method: 'POST',
