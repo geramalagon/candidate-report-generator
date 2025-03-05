@@ -6,11 +6,41 @@ import { Request, Response } from 'express';
 // @ts-ignore
 import pdf from 'pdf-parse';
 import { config, validateConfig } from './config/environment';
-import { fetchData } from './utils/apiClient';
+import { fetchData, generateContent } from './utils/apiClient';
+import path from 'path';
+import multer from 'multer';
+import fs from 'fs';
+import { exec } from 'child_process';
+import fetch from 'node-fetch';
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, 'uploads')); // Use the uploads directory
+  },
+  filename: (req, file, cb) => {
+    // Keep the original filename to help with matching resumes to candidates
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
 
 // Load environment variables in development
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
+}
+
+// Verify API key is available
+if (!process.env.GOOGLE_API_KEY) {
+  console.error('GOOGLE_API_KEY environment variable is not set');
 }
 
 // Required environment variables
@@ -60,6 +90,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cors());
 
+// At the top of your file, after dotenv.config()
+console.log('Environment variables loaded:');
+console.log(`- NODE_ENV: ${process.env.NODE_ENV}`);
+console.log(`- GOOGLE_CLOUD_PROJECT: ${process.env.GOOGLE_CLOUD_PROJECT}`);
+console.log(`- GOOGLE_API_KEY set: ${Boolean(process.env.GOOGLE_API_KEY)}`);
+
+// If the API key exists, log a masked version
+if (process.env.GOOGLE_API_KEY) {
+  const key = process.env.GOOGLE_API_KEY;
+  const maskedKey = key.substring(0, 4) + '...' + key.substring(key.length - 4);
+  console.log(`- GOOGLE_API_KEY: ${maskedKey}`);
+}
+
 async function extractTextFromBase64PDF(base64String: string): Promise<string> {
   try {
     const pdfData = base64String.replace(/^data:application\/pdf;base64,/, '');
@@ -74,11 +117,6 @@ async function extractTextFromBase64PDF(base64String: string): Promise<string> {
 
 const generateReport = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Add authentication check
-    if (!vertexAI) {
-      throw new Error('VertexAI client not initialized');
-    }
-
     const { csvContent, jobDescriptionContent, resumeContents } = req.body as GenerateReportRequest;
 
     // Validate inputs
@@ -93,80 +131,217 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const model = vertexAI.preview.getGenerativeModel({
-      model: 'gemini-pro',
+    // Truncate resume contents if needed
+    const maxResumeLength = 10000; // characters per resume
+    const truncatedResumes = resumeContents.map(content => {
+      if (content.length > maxResumeLength) {
+        console.warn(`Truncating resume from ${content.length} to ${maxResumeLength} characters`);
+        return content.substring(0, maxResumeLength);
+      }
+      return content;
     });
 
-    const prompt = `<examples>
-<example>
-<example_description>
-This output is good because it converts all the information you were given from different sources; Resumes in PDF format, Job Description in PDF format, and a CSV of the candidates' interview data and you generated a solid report for the client that focuses on the most important aspects with a clean format that is presentable
-</example_description>
-<candidate1>
-${resumeContents[0]}
-</candidate1>
-<candidate2>
-${resumeContents[1]}
-</candidate2>
-<candidate3>
-${resumeContents[2]}
-</candidate3>
-<job_description>
-${jobDescriptionContent}
-</job_description>
-<csv_data>
-${csvContent}
-</csv_data>
-</example>
-</examples>
-
-Create a candidate report from these files.`;
-
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.2,
-        topK: 40,
-        topP: 0.8,
-        maxOutputTokens: 8192,
-      },
-    });
-
-    const response = await result.response;
+    // Create a more concise prompt
+    const prompt = `Create a candidate report based on these materials:
     
-    // Add null check for response.candidates
-    if (!response.candidates?.[0]?.content?.parts?.[0]?.text) {
-      throw new Error('Invalid response from Gemini API');
-    }
+Job Description:
+${jobDescriptionContent.substring(0, 5000)}
 
-    const text = response.candidates[0].content.parts[0].text;
+CSV Data:
+${csvContent}
+
+${truncatedResumes.map((resume, index) => `Resume ${index + 1}:\n${resume}`).join('\n\n')}
+
+Generate a detailed HTML report comparing these candidates for the position.`;
+
+    const result = await generateContent(prompt);
+    
+    // Extract the generated text from the response
+    const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    if (!generatedText) {
+      throw new Error('No content generated from the model');
+    }
 
     res.json({
       success: true,
-      data: text
+      data: generatedText
     });
 
   } catch (error: any) {
-    console.error('Server Error:', {
-      message: error.message,
-      stack: error.stack,
-      code: error.code,
-    });
-    
+    console.error('Server Error:', error);
     res.status(500).json({
       success: false,
       error: {
         type: 'server_error',
-        message: error.message,
-        details: config.isProduction ? undefined : error.stack,
+        message: error.message
       }
     });
   }
 };
 
+// Update the Python report generation endpoint
+app.post('/api/generate-report-python', 
+  upload.fields([
+    { name: 'csvFile', maxCount: 1 },
+    { name: 'pdfFiles', maxCount: 10 }
+  ]), 
+  (req: Request, res: Response): void => {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const csvFile = files?.['csvFile']?.[0];
+    const pdfFiles = files?.['pdfFiles'];
+    
+    if (!csvFile || !pdfFiles || pdfFiles.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          type: 'validation_error',
+          message: 'Missing required files'
+        }
+      });
+      return;
+    }
+    
+    // Log the uploaded files for debugging
+    console.log('CSV File:', csvFile.originalname, csvFile.path);
+    console.log('PDF Files:', pdfFiles.map(f => `${f.originalname} -> ${f.path}`));
+    
+    // Create uploads directory if it doesn't exist
+    const uploadsDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    
+    const pythonScriptPath = path.join(__dirname, 'candidate_report_generator.py');
+    
+    // Join the PDF paths with quotes to handle spaces in filenames
+    const pdfPathsString = pdfFiles.map(file => `"${file.path}"`).join(' ');
+    
+    // Build the command with proper quoting
+    const command = `python "${pythonScriptPath}" "${csvFile.path}" ${pdfPathsString}`;
+    
+    console.log('Executing command:', command);
+    
+    // Pass environment variables to the child process
+    const env = { ...process.env };
+    
+    // Increase the maxBuffer size significantly
+    exec(command, { env, maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error executing Python script: ${error}`);
+        res.status(500).json({
+          success: false,
+          error: {
+            type: 'python_error',
+            message: `Python script error: ${error.message || error}`
+          }
+        });
+        return;
+      }
+      
+      if (stderr) {
+        console.error(`Python script stderr: ${stderr}`);
+      }
+      
+      // Don't clean up files immediately for debugging purposes
+      // We'll comment this out for now to help with debugging
+      /*
+      try {
+        fs.unlinkSync(csvFile.path);
+        pdfFiles.forEach(file => fs.unlinkSync(file.path));
+      } catch (cleanupError) {
+        console.error('Error cleaning up files:', cleanupError);
+      }
+      */
+      
+      res.json({
+        success: true,
+        data: stdout
+      });
+    });
+  }
+);
+
+// Your existing API endpoint for Gemini-based report generation
 app.post('/api/generate-report', generateReport);
 
-const PORT = 3001;
+// Add this new endpoint to test the API key
+app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const apiKey = process.env.GOOGLE_API_KEY;
+    
+    if (!apiKey) {
+      res.status(500).json({
+        success: false,
+        error: {
+          type: 'configuration_error',
+          message: 'API key is not configured'
+        }
+      });
+      return;
+    }
+    
+    // Make a simple test request to the Gemini API
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: "Hello, please respond with just the word 'Success' if you can read this message."
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 10
+        }
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('API Key Test Error:', errorData);
+      
+      res.status(500).json({
+        success: false,
+        error: {
+          type: 'api_error',
+          message: `API error: ${errorData.error?.message || 'Unknown error'}`,
+          details: errorData
+        }
+      });
+      return;
+    }
+    
+    const data = await response.json();
+    
+    res.json({
+      success: true,
+      message: 'API key is valid',
+      response: data
+    });
+  } catch (error: any) {
+    console.error('Error testing API key:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: {
+        type: 'test_error',
+        message: error.message || 'Unknown error'
+      }
+    });
+  }
+});
+
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

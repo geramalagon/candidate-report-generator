@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Upload, FileText, Briefcase, Users, AlertCircle, X, Loader2, Table, CheckCircle2 } from 'lucide-react';
 import { generateCandidateReport } from './lib/api';
+import axios from 'axios';
 
 console.log('App component loaded')
 
@@ -22,12 +23,13 @@ function App(): JSX.Element {
   const [isProcessing, setIsProcessing] = useState(false);
   const [apiError, setApiError] = useState<ApiError | null>(null);
   const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [activeGenerator, setActiveGenerator] = useState<'ai' | 'python'>('ai');
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>, type: 'csv' | 'job-description' | 'resume') => {
     const newFiles = Array.from(event.target.files || []).map(file => ({
       file,
       type,
-      status: 'pending' as const
+      status: 'success' as const // Set all files to success immediately
     }));
 
     // Remove existing files of the same type (except for resumes)
@@ -35,54 +37,8 @@ function App(): JSX.Element {
       setFiles(prev => prev.filter(f => f.type !== type));
     }
 
-    // Read file contents
-    const filesWithContent = await Promise.all(
-      newFiles.map(async (fileUpload) => {
-        try {
-          if (fileUpload.type === 'csv') {
-            // Handle CSV files as text
-            const content = await fileUpload.file.text();
-            return { ...fileUpload, content, status: 'success' as const };
-          } else {
-            // Handle PDF files with proper base64 encoding
-            const content = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => {
-                // Get the base64 data without the data URL prefix
-                const base64String = (reader.result as string)
-                  .replace(/^data:application\/pdf;base64,/, '');
-                
-                // Ensure it's a valid base64 string (ASCII only)
-                try {
-                  // Convert to Uint8Array and back to ensure proper encoding
-                  const binary = atob(base64String);
-                  const bytes = new Uint8Array(binary.length);
-                  for (let i = 0; i < binary.length; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                  }
-                  // Re-encode to base64
-                  const validBase64 = btoa(String.fromCharCode(...bytes));
-                  resolve(validBase64);
-                } catch (error) {
-                  reject(new Error('Invalid PDF format'));
-                }
-              };
-              reader.onerror = reject;
-              reader.readAsDataURL(fileUpload.file);
-            });
-            return { ...fileUpload, content, status: 'success' as const };
-          }
-        } catch (error) {
-          return {
-            ...fileUpload,
-            status: 'error' as const,
-            error: 'Failed to read file content'
-          };
-        }
-      })
-    );
-
-    setFiles(prev => [...prev, ...filesWithContent]);
+    // Add the new files to state without trying to read their content
+    setFiles(prev => [...prev, ...newFiles]);
     setApiError(null);
   };
 
@@ -101,28 +57,19 @@ function App(): JSX.Element {
     if (!csvFile) {
       throw new Error('Please upload a CSV report');
     }
-    if (!jobDescription) {
-      throw new Error('Please upload a job description');
-    }
+    
     if (resumes.length === 0) {
       throw new Error('Please upload at least one candidate resume');
     }
 
-    // Validate file contents
-    if (!csvFile.content) {
-      throw new Error('Failed to read CSV file content');
+    if (activeGenerator === 'ai' && !jobDescription) {
+      throw new Error('Please upload a job description');
     }
-    if (!jobDescription.content) {
-      throw new Error('Failed to read job description content');
-    }
-    if (resumes.some(r => !r.content)) {
-      throw new Error('Failed to read one or more resume contents');
-    }
-
+    
     return {
-      csvContent: csvFile.content,
-      jobDescriptionContent: jobDescription.content,
-      resumeContents: resumes.map(r => r.content!),
+      csvFile: csvFile.file,
+      jobDescriptionFile: jobDescription?.file,
+      resumeFiles: resumes.map(r => r.file)
     };
   };
 
@@ -133,19 +80,72 @@ function App(): JSX.Element {
     setReportHtml(null);
 
     try {
-      const { csvContent, jobDescriptionContent, resumeContents } = validateFiles();
+      const { csvFile, jobDescriptionFile, resumeFiles } = validateFiles();
       
       // Update file statuses to uploading
       setFiles(prev => prev.map(file => ({ ...file, status: 'uploading' as const })));
 
-      // Generate report using Anthropic API
-      const report = await generateCandidateReport(
-        csvContent,
-        jobDescriptionContent,
-        resumeContents
-      );
+      if (activeGenerator === 'ai') {
+        // For AI generator, we need to read file contents
+        let csvContent, jobDescriptionContent, resumeContents;
+        
+        try {
+          // Read CSV content
+          csvContent = await csvFile.text();
+          
+          // Read job description content
+          if (jobDescriptionFile) {
+            jobDescriptionContent = await jobDescriptionFile.text();
+          } else {
+            throw new Error('Job description file is required');
+          }
+          
+          // Read resume contents
+          resumeContents = await Promise.all(
+            resumeFiles.map(async (file) => {
+              try {
+                return await file.text();
+              } catch (error) {
+                console.error(`Error reading resume ${file.name}:`, error);
+                throw new Error(`Failed to read resume: ${file.name}`);
+              }
+            })
+          );
+        } catch (error) {
+          console.error('Error reading file contents:', error);
+          throw new Error(`Failed to read file contents: ${error.message}`);
+        }
 
-      setReportHtml(report);
+        // Generate report using Anthropic API
+        const report = await generateCandidateReport(
+          csvContent,
+          jobDescriptionContent,
+          resumeContents
+        );
+
+        setReportHtml(report);
+      } else {
+        // Python generator - send files directly
+        const formData = new FormData();
+        formData.append('csvFile', csvFile);
+        resumeFiles.forEach(file => {
+          formData.append('pdfFiles', file);
+        });
+        
+        const response = await axios.post('/api/generate-report-python', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          },
+          timeout: 300000 // 5 minute timeout
+        });
+        
+        if (response.data.success) {
+          setReportHtml(response.data.data);
+        } else {
+          throw new Error(response.data.error?.message || 'An error occurred');
+        }
+      }
+      
       setFiles(prev => prev.map(file => ({ ...file, status: 'success' as const })));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -229,6 +229,29 @@ function App(): JSX.Element {
 
   const hasFileOfType = (type: 'csv' | 'job-description' | 'resume') => {
     return files.some(file => file.type === type);
+  };
+
+  const validateFile = (file: File): boolean => {
+    // Check file type
+    if (file.type !== 'application/pdf') {
+      setApiError({
+        message: `File must be a PDF: ${file.name}`,
+        code: 'invalid_file_type'
+      });
+      return false;
+    }
+    
+    // Check file size (e.g., limit to 10MB)
+    const maxSize = 10 * 1024 * 1024; // 10MB in bytes
+    if (file.size > maxSize) {
+      setApiError({
+        message: `File too large (max 10MB): ${file.name}`,
+        code: 'file_too_large'
+      });
+      return false;
+    }
+    
+    return true;
   };
 
   return (
