@@ -15,7 +15,7 @@ export class DocumentAIService {
     this.client = new DocumentProcessorServiceClient();
     
     const location = options.location || config.google.location;
-    const processorId = options.processorId || config.google.processorId;
+    const processorId = options.processorId || process.env.GOOGLE_PROCESSOR_ID || '';
 
     this.processorPath = this.client.processorPath(
       config.google.projectId,

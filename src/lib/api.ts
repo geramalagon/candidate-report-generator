@@ -4,6 +4,12 @@ export async function generateCandidateReport(
   resumeContents: string[]
 ) {
   try {
+    // Add logging to see what's being sent
+    console.log("Sending API request with:");
+    console.log("- CSV length:", csvContent?.length || 0);
+    console.log("- Job description length:", jobDescriptionContent?.length || 0);
+    console.log("- Number of resumes:", resumeContents?.length || 0);
+    
     const response = await fetch('http://localhost:3001/api/generate-report', {
       method: 'POST',
       headers: {

@@ -3,7 +3,6 @@ import cors from 'cors';
 import { VertexAI } from '@google-cloud/vertexai';
 import dotenv from 'dotenv';
 import { Request, Response } from 'express';
-// @ts-ignore
 import pdf from 'pdf-parse';
 import { config, validateConfig } from './config/environment';
 import { fetchData, generateContent } from './utils/apiClient';
@@ -12,6 +11,7 @@ import multer from 'multer';
 import fs from 'fs';
 import { exec } from 'child_process';
 import fetch from 'node-fetch';
+import os from 'os';
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -115,11 +115,23 @@ async function extractTextFromBase64PDF(base64String: string): Promise<string> {
   }
 }
 
+// Update the generateReport function with better debugging
 const generateReport = async (req: Request, res: Response): Promise<void> => {
   try {
     const { csvContent, jobDescriptionContent, resumeContents } = req.body as GenerateReportRequest;
 
-    // Validate inputs
+    // Validate inputs with more detailed logging
+    console.log("Validating inputs:");
+    console.log("- CSV content exists:", Boolean(csvContent));
+    console.log("- CSV content type:", typeof csvContent);
+    console.log("- CSV content sample:", csvContent?.substring(0, 100) + "...");
+    console.log("- Job description exists:", Boolean(jobDescriptionContent));
+    console.log("- Job description sample:", jobDescriptionContent?.substring(0, 100) + "...");
+    console.log("- Resume contents count:", resumeContents?.length || 0);
+    if (resumeContents?.length > 0) {
+      console.log("- First resume sample:", resumeContents[0]?.substring(0, 100) + "...");
+    }
+
     if (!csvContent || !jobDescriptionContent || !resumeContents || resumeContents.length === 0) {
       res.status(400).json({
         success: false,
@@ -131,34 +143,161 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Truncate resume contents if needed
-    const maxResumeLength = 10000; // characters per resume
-    const truncatedResumes = resumeContents.map(content => {
-      if (content.length > maxResumeLength) {
-        console.warn(`Truncating resume from ${content.length} to ${maxResumeLength} characters`);
-        return content.substring(0, maxResumeLength);
-      }
-      return content;
+    // Get current date for the report
+    const currentDate = new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
     });
 
-    // Create a more concise prompt
-    const prompt = `Create a candidate report based on these materials:
-    
-Job Description:
-${jobDescriptionContent.substring(0, 5000)}
+    // Read the prompt from the file - CHECK THIS PATH
+    const promptFilePath = path.join(__dirname, '..', 'prompt.txt');
+    console.log("Looking for prompt file at:", promptFilePath);
+    let promptTemplate: string;
+    try {
+      promptTemplate = fs.readFileSync(promptFilePath, 'utf8');
+      console.log("Prompt template loaded, length:", promptTemplate.length);
+      console.log("Prompt template sample:", promptTemplate.substring(0, 100) + "...");
+    } catch (readError) {
+      console.error('Error reading prompt file:', readError);
+      console.error('Current directory:', __dirname);
+      console.error('Attempted path:', promptFilePath);
+      // Try alternative locations
+      const altPaths = [
+        path.join(__dirname, 'prompt.txt'),
+        path.join(__dirname, '../..', 'prompt.txt'),
+        path.join(process.cwd(), 'prompt.txt')
+      ];
+      console.log("Trying alternative paths:", altPaths);
+      
+      let found = false;
+      for (const altPath of altPaths) {
+        try {
+          console.log("Trying:", altPath);
+          promptTemplate = fs.readFileSync(altPath, 'utf8');
+          console.log("Found prompt at:", altPath);
+          found = true;
+          break;
+        } catch (e) {
+          console.log("Not found at:", altPath);
+        }
+      }
+      
+      if (!found) {
+        res.status(500).json({
+          success: false,
+          error: {
+            type: 'server_error',
+            message: 'Failed to read the prompt file.'
+          }
+        });
+        return;
+      }
+    }
 
-CSV Data:
+    // Read the example output HTML file - CHECK THIS PATH
+    const exampleOutputPath = path.join(__dirname, '..', 'example_output.html');
+    console.log("Looking for example output file at:", exampleOutputPath);
+    let exampleOutput: string;
+    try {
+      exampleOutput = fs.readFileSync(exampleOutputPath, 'utf8');
+      console.log("Example output loaded, length:", exampleOutput.length);
+    } catch (readError) {
+      console.error('Error reading example output file:', readError);
+      console.error('Current directory:', __dirname);
+      console.error('Attempted path:', exampleOutputPath);
+      
+      // Try alternative locations
+      const altPaths = [
+        path.join(__dirname, 'example_output.html'),
+        path.join(__dirname, '../..', 'example_output.html'),
+        path.join(process.cwd(), 'example_output.html')
+      ];
+      console.log("Trying alternative paths:", altPaths);
+      
+      let found = false;
+      for (const altPath of altPaths) {
+        try {
+          console.log("Trying:", altPath);
+          exampleOutput = fs.readFileSync(altPath, 'utf8');
+          console.log("Found example output at:", altPath);
+          found = true;
+          break;
+        } catch (e) {
+          console.log("Not found at:", altPath);
+        }
+      }
+      
+      if (!found) {
+        res.status(500).json({
+          success: false,
+          error: {
+            type: 'server_error',
+            message: 'Failed to read the example output file.'
+          }
+        });
+        return;
+      }
+    }
+
+    // Insert the actual file contents into the prompt
+    const candidateDataSection = resumeContents.map((resume, index) => `
+<candidate${index + 1}>
+${resume}
+</candidate${index + 1}>
+`).join('\n');
+
+    console.log("Candidate data section created, length:", candidateDataSection.length);
+
+    // Create the full prompt with all data
+    const fullPrompt = `${promptTemplate}
+
+## Input Data
+
+<csv_file>
 ${csvContent}
+</csv_file>
 
-${truncatedResumes.map((resume, index) => `Resume ${index + 1}:\n${resume}`).join('\n\n')}
+<job_description>
+${jobDescriptionContent}
+</job_description>
 
-Generate a detailed HTML report comparing these candidates for the position.`;
+${candidateDataSection}
 
-    const result = await generateContent(prompt);
-    
+## Example Output Format
+
+Here is an example of the expected HTML output format:
+
+\`\`\`html
+${exampleOutput}
+\`\`\`
+
+Please generate a complete HTML report following this structure, using the provided candidate data, CSV content, and job description.`;
+
+    console.log("Full prompt created, total length:", fullPrompt.length);
+    console.log("First 200 chars:", fullPrompt.substring(0, 200));
+    console.log("Last 200 chars:", fullPrompt.substring(fullPrompt.length - 200));
+
+    // Check if the prompt is too long for the model
+    if (fullPrompt.length > 100000) {
+      console.warn("Warning: Prompt is very long (" + fullPrompt.length + " chars). This might exceed model limits.");
+    }
+
+    // Log the API call we're about to make
+    console.log("Calling generateContent with prompt length:", fullPrompt.length);
+
+    const result = await generateContent(fullPrompt);
+
+    console.log("API response received");
+    console.log("Response has candidates:", Boolean(result.candidates));
+    console.log("Number of candidates:", result.candidates?.length || 0);
+
     // Extract the generated text from the response
     const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
+
+    console.log("Generated text length:", generatedText.length);
+    console.log("Generated text sample:", generatedText.substring(0, 200) + "...");
+
     if (!generatedText) {
       throw new Error('No content generated from the model');
     }
@@ -170,6 +309,7 @@ Generate a detailed HTML report comparing these candidates for the position.`;
 
   } catch (error: any) {
     console.error('Server Error:', error);
+    console.error('Error details:', error.stack);
     res.status(500).json({
       success: false,
       error: {
@@ -181,16 +321,16 @@ Generate a detailed HTML report comparing these candidates for the position.`;
 };
 
 // Update the Python report generation endpoint
-app.post('/api/generate-report-python', 
+app.post('/api/generate-report-python',
   upload.fields([
     { name: 'csvFile', maxCount: 1 },
     { name: 'pdfFiles', maxCount: 10 }
-  ]), 
+  ]),
   (req: Request, res: Response): void => {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     const csvFile = files?.['csvFile']?.[0];
     const pdfFiles = files?.['pdfFiles'];
-    
+
     if (!csvFile || !pdfFiles || pdfFiles.length === 0) {
       res.status(400).json({
         success: false,
@@ -199,32 +339,32 @@ app.post('/api/generate-report-python',
           message: 'Missing required files'
         }
       });
-      return;
+        return;
     }
-    
+
     // Log the uploaded files for debugging
     console.log('CSV File:', csvFile.originalname, csvFile.path);
     console.log('PDF Files:', pdfFiles.map(f => `${f.originalname} -> ${f.path}`));
-    
+
     // Create uploads directory if it doesn't exist
     const uploadsDir = path.join(__dirname, 'uploads');
     if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
+        fs.mkdirSync(uploadsDir, { recursive: true });
     }
-    
+
     const pythonScriptPath = path.join(__dirname, 'candidate_report_generator.py');
-    
+
     // Join the PDF paths with quotes to handle spaces in filenames
     const pdfPathsString = pdfFiles.map(file => `"${file.path}"`).join(' ');
-    
+
     // Build the command with proper quoting
     const command = `python "${pythonScriptPath}" "${csvFile.path}" ${pdfPathsString}`;
-    
+
     console.log('Executing command:', command);
-    
+
     // Pass environment variables to the child process
     const env = { ...process.env };
-    
+
     // Increase the maxBuffer size significantly
     exec(command, { env, maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
       if (error) {
@@ -236,13 +376,13 @@ app.post('/api/generate-report-python',
             message: `Python script error: ${error.message || error}`
           }
         });
-        return;
+          return;
       }
-      
+
       if (stderr) {
         console.error(`Python script stderr: ${stderr}`);
       }
-      
+
       // Don't clean up files immediately for debugging purposes
       // We'll comment this out for now to help with debugging
       /*
@@ -253,7 +393,7 @@ app.post('/api/generate-report-python',
         console.error('Error cleaning up files:', cleanupError);
       }
       */
-      
+
       res.json({
         success: true,
         data: stdout
@@ -269,7 +409,7 @@ app.post('/api/generate-report', generateReport);
 app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> => {
   try {
     const apiKey = process.env.GOOGLE_API_KEY;
-    
+
     if (!apiKey) {
       res.status(500).json({
         success: false,
@@ -278,12 +418,12 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
           message: 'API key is not configured'
         }
       });
-      return;
+        return;
     }
-    
+
     // Make a simple test request to the Gemini API
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -305,11 +445,11 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
         }
       })
     });
-    
+
     if (!response.ok) {
       const errorData = await response.json();
       console.error('API Key Test Error:', errorData);
-      
+
       res.status(500).json({
         success: false,
         error: {
@@ -318,11 +458,11 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
           details: errorData
         }
       });
-      return;
+        return;
     }
-    
+
     const data = await response.json();
-    
+
     res.json({
       success: true,
       message: 'API key is valid',
@@ -330,7 +470,7 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
     });
   } catch (error: any) {
     console.error('Error testing API key:', error);
-    
+
     res.status(500).json({
       success: false,
       error: {
@@ -338,6 +478,7 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
         message: error.message || 'Unknown error'
       }
     });
+    return;
   }
 });
 

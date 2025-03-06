@@ -1,6 +1,7 @@
 import { config } from '../config/environment';
 import { GoogleAuth } from 'google-auth-library';
 import fetch from 'node-fetch';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 
 // Initialize Google Auth client
 const auth = new GoogleAuth({
@@ -72,48 +73,99 @@ if (!apiKey) {
 }
 
 export async function generateContent(prompt: string) {
+  console.log("generateContent called with prompt length:", prompt.length);
+  
+  // Log the first and last parts of the prompt
+  console.log("PROMPT FIRST 1000 CHARS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+  console.log(prompt.substring(0, 1000));
+  console.log("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
+  console.log("PROMPT LAST 1000 CHARS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+  console.log(prompt.substring(prompt.length - 1000));
+  console.log("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
+  
+  // Check if API key is set
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    console.error("GOOGLE_API_KEY is not set in environment variables");
+    throw new Error("API key is not configured");
+  }
+  
   try {
-    // Log the full URL (with masked API key)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
-    const maskedUrl = url.replace(apiKey as string, apiKey?.substring(0, 4) + '...' + apiKey?.substring((apiKey as string).length - 4));
-    console.log(`Making API request to: ${maskedUrl}`);
+    // Initialize the Google Generative AI client
+    const genAI = new GoogleGenerativeAI(apiKey);
     
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    // For text-only input, use the gemini-pro model
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    
+    console.log("Using model: gemini-pro");
+    
+    // Configure safety settings
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
       },
-      body: JSON.stringify({
-        contents: [
-          {
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+      },
+    ];
+    
+    // Configure generation parameters
+    const generationConfig = {
+      temperature: 0.4,
+      topK: 32,
+      topP: 1,
+      maxOutputTokens: 8192,
+    };
+    
+    console.log("Sending request to Gemini API...");
+    
+    // Generate content
+    const result = await model.generateContent({
+      contents: [{ parts: [{ text: prompt }] }],
+      safetySettings,
+      generationConfig,
+    });
+    
+    console.log("Response received from Gemini API");
+    
+    // Log response details
+    const response = result.response;
+    console.log("Response has text:", Boolean(response.text()));
+    console.log("Response text length:", response.text().length);
+    console.log("Response text sample:", response.text().substring(0, 500) + "...");
+    
+    // Format the response to match the expected structure
+    return {
+      candidates: [
+        {
+          content: {
             parts: [
               {
-                text: prompt
+                text: response.text()
               }
             ]
           }
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8192,
-          responseMimeType: "text/plain"
         }
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('API Error:', errorData);
-      throw new Error(`API error: ${errorData.error?.message || 'Unknown error'}`);
-    }
-
-    const data = await response.json();
-    console.log('API response received successfully');
-    return data;
+      ]
+    };
   } catch (error) {
-    console.error('Error generating content:', error);
+    console.error("Error in generateContent:", error);
+    
+    // Log more details about the error
+    if (error.response) {
+      console.error("Error response:", error.response.data);
+    }
+    
     throw error;
   }
 }

@@ -24,6 +24,7 @@ export const config = {
     location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
     apiKey: process.env.GOOGLE_API_KEY,
     useWIF: process.env.NODE_ENV === 'production',
+    processorId: process.env.GOOGLE_PROCESSOR_ID,
   },
   environment: process.env.NODE_ENV || 'development',
   isProduction: process.env.NODE_ENV === 'production',

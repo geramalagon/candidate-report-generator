@@ -5,6 +5,8 @@ from collections import defaultdict
 import sys
 import os
 import re
+from google import genai
+from google.genai import types
 
 # Utility Functions
 def read_pdf(file_path):
@@ -134,200 +136,161 @@ def extract_pros_cons(row, resume_text = ""):
     return pros, cons
 
 # Main Report Generation Function
-def generate_candidate_report(csv_file, resume_files):
-    """Generates the full HTML report."""
+def generate_candidate_report(candidate_data):
+    """Generate candidate analysis report using Gemini API.
+    
+    Args:
+        candidate_data: String containing the candidate information, job description, and other relevant data
+        
+    Returns:
+        The generated HTML report as text
+    """
+    # Initialize the Gemini client
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not set")
+        
+    client = genai.Client(api_key=api_key)
+
+    # Define the system prompt
+    system_prompt = """<system_prompt>
+# Candidate Analysis Report Generator
+
+You are an expert system for analyzing technical candidate data and generating standardized reports. Your task is to process candidate information from CSV and PDF files and create a comprehensive HTML report with a dashboard overview and detailed candidate profiles.
+
+## Input Format
+
+You will receive two types of files:
+
+1. CSV file containing candidate evaluation data with columns:
+<csv_file>
+	<data_schema>
+{
+  \"interview_id\": \"integer\"
+  \"candidate_name\": \"string\",
+  \"job_title_applied_for\": \"string\",
+  \"key_skills_mentioned\": [\"string\"],
+  \"relevant_experience_years\": \"integer\",
+  \"additional_experience_shared\": \"string\",
+  \"preparedness_score\": \"integer\",
+  \"values_alignment_score\": \"integer\",
+  \"language_proficiency_score\": \"integer\",
+  \"final_recommendation\": \"boolean\"
+}
+	</data_schema>
+	<structured_data_prompt>
+
+\"Based on the interview, provide structured data in the following fields:
+- Interview ID
+- Candidate Name: Full name of the candidate.
+- Job Title Applied For: Position the candidate applied for.
+- Key Skills Mentioned: List of key skills highlighted during the interview.
+- Relevant Experience (Years): Number of years of relevant experience shared by the candidate.
+- Additional Experience Shared: Notable projects or experiences the candidate shared beyond their resume.
+- Preparedness Score (1-10): Score based on how well the candidate knew the role and company.
+- Values Alignment Score (1-10): Score based on the alignment with company values.
+- Language Proficiency Score (1-10): Score based on clarity and communication.
+- Final Recommendation: Recommendation on whether the candidate should proceed to the next step.\"
+	</structured_data_prompt>
+</csv_file>
+
+2. PDF/text files containing candidate resumes
+
+## Output Format
+
+Generate an HTML report with two main sections:
+
+1. Dashboard Overview
+   - Candidate summary cards with:
+     - Name and years of experience
+     - English level
+     - Overall match score
+     - Preparedness score
+     - Values alignment score
+     - Visual score bars using tailwind classes
+
+2. Detailed Profiles
+   For each candidate:
+   - Core Info section
+     - Experience & Skills
+     - Logistics (start date, location, availability)
+   - Pros and Cons section
+     - Extract key strengths as bullet points
+     - List potential concerns or areas for improvement
+   - Detailed Analysis
+     - Technical Assessment
+     - Cultural Fit
+     - Growth Potential
+     - Additional Notes
+
+## Guidelines
+
+1. Use consistent color coding per candidate:
+   - First candidate: Blue theme (blue-800, blue-500, etc.)
+   - Second candidate: Green theme
+   - Third candidate: Purple theme
+
+2. For Pros/Cons:
+   - Extract pros from high scores and positive keywords in experience
+   - Extract cons from lower scores and missing skills/experience
+   - Keep points concise and scannable
+
+3. Visual Elements:
+   - Use progress bars for scores
+   - Include appropriate icons for pros/cons
+   - Maintain responsive layout using Tailwind CSS
+
+4. Scoring:
+   - Calculate overall match based on:
+     - Experience weight: 30%
+     - Skills match: 25%
+     - Values alignment: 25%
+     - Language proficiency: 20%
+
+## Special Instructions
+
+1. Always use Tailwind CSS for styling
+2. Only use core utility classes (avoid arbitrary values)
+3. Keep English levels as text (B1, B2, etc.) rather than scores
+4. Focus on scannable, concise points in pros/cons
+5. Use consistent score visualization styles
+6. Include any relevant certifications or specialized training from resumes
+
+Remember to analyze both the structured data from CSV and unstructured data from resumes to provide a complete picture of each candidate.
+</system_prompt>"""
+
+    # Combine system prompt with candidate data
+    full_prompt = system_prompt + "\n\n" + candidate_data
+
     try:
-        print(f"Reading CSV file: {csv_file}")
-        df = pd.read_csv(csv_file)
-
-        # Properly handle list representation for 'key_skills_mentioned'
-        df['key_skills_mentioned'] = df['key_skills_mentioned'].apply(eval)  #WARNING: eval is dangerous
-
-        candidate_data = df.to_dict('records')
-        print(f"Found {len(candidate_data)} candidates in CSV")
-
-    except FileNotFoundError:
-        print(f"Error: CSV file not found at {csv_file}")
-        return "<p>Error: CSV file not found.</p>"
-    except Exception as e:
-        print(f"Error reading CSV: {e}")
-        return f"<p>Error reading CSV: {e}</p>"
-
-    candidate_profiles = defaultdict(dict)
-    for candidate in candidate_data:
-        candidate_profiles[candidate['candidate_name']] = candidate
-
-    # Load and store resume data
-    resume_texts = {}
-    print(f"Processing {len(resume_files)} resume files")
-    for filename in resume_files:
-        resume_text = read_pdf(filename)
-        
-        # Try to match the resume to a candidate
-        # First, try to extract the candidate name from the filename
-        candidate_name = extract_candidate_name(filename)
-        print(f"Extracted candidate name from filename: '{candidate_name}'")
-        
-        # Store the resume text under multiple possible keys to increase matching chances
-        resume_texts[candidate_name] = resume_text
-        resume_texts[candidate_name.lower()] = resume_text
-        resume_texts[candidate_name.replace(" ", "_")] = resume_text
-        resume_texts[candidate_name.replace(" ", "")] = resume_text
-        
-        # Also store with the original filename as a fallback
-        base_name = os.path.basename(filename)
-        resume_texts[base_name] = resume_text
-
-    # Generate dashboard
-    dashboard_html = generate_dashboard(candidate_data)
-
-    # Generate profiles
-    profiles_html = ""
-    for candidate in candidate_data:
-        candidate_name = candidate['candidate_name']
-        print(f"Generating profile for: {candidate_name}")
-        
-        # Try different variations of the candidate name to match resume files
-        resume_text = ""
-        name_variations = [
-            candidate_name,
-            candidate_name.lower(),
-            candidate_name.replace(" ", "_"),
-            candidate_name.replace(" ", "")
+        # Set up the model and configuration
+        model = "gemini-2.0-flash-lite"
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=full_prompt)],
+            ),
         ]
+        generate_content_config = types.GenerateContentConfig(
+            temperature=1,
+            top_p=0.95,
+            top_k=40,
+            max_output_tokens=8192,
+            response_mime_type="text/plain",
+        )
+
+        # Generate the content
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=generate_content_config,
+        )
         
-        for name_var in name_variations:
-            if name_var in resume_texts:
-                resume_text = resume_texts[name_var]
-                print(f"Found resume for {candidate_name} using variation: {name_var}")
-                break
-        
-        if not resume_text:
-            print(f"Warning: No resume found for {candidate_name}. Available resume keys: {list(resume_texts.keys())}")
-        
-        profile_html = generate_candidate_profile(candidate_profiles[candidate_name], resume_text)
-        profiles_html += profile_html
-
-    full_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Candidate Analysis Report</title>
-        <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    </head>
-    <body class="bg-gray-100">
-        <div class="container mx-auto p-8">
-            <h1 class="text-3xl font-bold mb-4">Candidate Analysis Report</h1>
-            {dashboard_html}
-            <h2 class="text-2xl font-bold mt-8 mb-4">Detailed Profiles</h2>
-            {profiles_html}
-        </div>
-    </body>
-    </html>
-    """
-    return full_html
-
-
-def generate_dashboard(candidate_data):
-    """Generates the dashboard overview section of the report."""
-    dashboard_cards = []
-    candidate_colors = ["blue", "green", "purple"]  # Added more colors
-
-    for i, candidate in enumerate(candidate_data):
-        color = candidate_colors[i % len(candidate_colors)] # Use modulo for cycling through the colors
-        match_score = calculate_match_score(candidate)
-        card_html = f"""
-            <div class="w-full md:w-1/3 p-4">
-                <div class="bg-white rounded-lg shadow-md p-6 border border-{color}-200">
-                    <h3 class="text-xl font-semibold text-{color}-800 mb-2">{candidate['candidate_name']}</h3>
-                    <p class="text-gray-600">Experience: {candidate['relevant_experience_years']} years</p>
-                    <p class="text-gray-600">English Level: {candidate['language_proficiency_score']}</p>
-                    <p class="text-gray-600">Overall Match: {match_score}%</p>
-
-                    <div class="mb-2">
-                        <div class="text-sm font-bold text-{color}-700 mb-1">Preparedness: {candidate['preparedness_score']}</div>
-                        <div class="w-full bg-gray-200 rounded-full h-2.5">
-                            <div class="bg-{color}-500 h-2.5 rounded-full" style="width: {candidate['preparedness_score']*10}%"></div>
-                        </div>
-                    </div>
-
-                    <div class="mb-2">
-                        <div class="text-sm font-bold text-{color}-700 mb-1">Values Alignment: {candidate['values_alignment_score']}</div>
-                        <div class="w-full bg-gray-200 rounded-full h-2.5">
-                            <div class="bg-{color}-500 h-2.5 rounded-full" style="width: {candidate['values_alignment_score']*10}%"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        """
-        dashboard_cards.append(card_html)
-
-    dashboard_html = f"""
-        <div class="flex flex-wrap -mx-4">
-            {''.join(dashboard_cards)}
-        </div>
-    """
-    return dashboard_html
-
-
-def generate_candidate_profile(candidate, resume_text):
-  """Generates the detailed profile for a single candidate."""
-  color = "blue" #TODO: FIX THE COLOR cycling correctly for the dashboard + candidate profile pairing (requires higher order knowledge)
-  match_score = calculate_match_score(candidate)
-  pros, cons = extract_pros_cons(candidate, resume_text)
-
-  # Create a resume excerpt that's not truncated
-  resume_excerpt = resume_text[:500] + "..." if len(resume_text) > 500 else resume_text
-  
-  profile_html = f"""
-  <div class="mb-8 p-6 bg-white rounded-lg shadow-md border border-{color}-200">
-      <h3 class="text-xl font-semibold text-{color}-800 mb-4">{candidate['candidate_name']} - {candidate['job_title_applied_for']}</h3>
-
-      <div class="mb-4">
-          <h4 class="text-lg font-semibold text-{color}-700 mb-2">Core Info</h4>
-          <p class="text-gray-600">Experience: {candidate['relevant_experience_years']} years</p>
-          <p class="text-gray-600">Skills: {', '.join(candidate['key_skills_mentioned'])}</p>
-          <p class="text-gray-600">Additional Experience: {candidate['additional_experience_shared']}</p>
-
-          <div class="mt-2">
-              <h5 class="text-md font-semibold text-{color}-600 mb-1">Resume Excerpt:</h5>
-              <div class="text-gray-600 bg-gray-50 p-3 rounded max-h-40 overflow-y-auto">
-                  {resume_excerpt}
-              </div>
-          </div>
-      </div>
-
-      <div class="mb-4">
-          <h4 class="text-lg font-semibold text-{color}-700 mb-2">Pros & Cons</h4>
-          <div class="flex">
-              <div class="w-1/2 pr-2">
-                  <h5 class="text-md font-semibold text-{color}-600 mb-1">Pros</h5>
-                  <ul class="list-disc list-inside text-gray-600">
-                      {''.join([f'<li>{pro}</li>' for pro in pros])}
-                  </ul>
-              </div>
-              <div class="w-1/2 pl-2">
-                  <h5 class="text-md font-semibold text-{color}-600 mb-1">Cons</h5>
-                  <ul class="list-disc list-inside text-gray-600">
-                      {''.join([f'<li>{con}</li>' for con in cons])}
-                  </ul>
-              </div>
-          </div>
-      </div>
-
-      <div class="mb-4">
-          <h4 class="text-lg font-semibold text-{color}-700 mb-2">Detailed Analysis</h4>
-          <p class="text-gray-600">Technical Assessment: {candidate['preparedness_score']}/10</p>
-          <p class="text-gray-600">Cultural Fit: {candidate['values_alignment_score']}/10</p>
-          <p class="text-gray-600">Language proficiency: {candidate['language_proficiency_score']}/10</p>
-      </div>
-  </div>
-  """
-
-  return profile_html
-
+        return response.text
+    
+    except Exception as e:
+        print(f"Error generating candidate report: {str(e)}")
+        raise
 
 # When script is run directly, use command line arguments
 if __name__ == "__main__":

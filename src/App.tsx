@@ -116,6 +116,12 @@ function App(): JSX.Element {
           throw new Error(`Failed to read file contents: ${error.message}`);
         }
 
+        // Add logging before the API call
+        console.log("About to call API with:");
+        console.log("- CSV content exists:", Boolean(csvContent));
+        console.log("- Job description exists:", Boolean(jobDescriptionContent));
+        console.log("- Resume contents count:", resumeContents.length);
+
         // Generate report using Anthropic API
         const report = await generateCandidateReport(
           csvContent,
