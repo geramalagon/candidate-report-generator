@@ -1,449 +1,273 @@
-import React, { useState } from 'react';
-import { Upload, FileText, Briefcase, Users, AlertCircle, X, Loader2, Table, CheckCircle2 } from 'lucide-react';
+import React, { useState, useRef, DragEvent } from 'react';
+import CopyButton from './components/CopyButton';
 import { generateCandidateReport } from './lib/api';
-import axios from 'axios';
+import './App.css'; // Make sure to import your CSS
 
-console.log('App component loaded')
+function App() {
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [jobDescriptionFile, setJobDescriptionFile] = useState<File | null>(null);
+  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
+  const [reportHtml, setReportHtml] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Refs for file inputs
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const jobDescInputRef = useRef<HTMLInputElement>(null);
+  const resumeInputRef = useRef<HTMLInputElement>(null);
+  
+  // Drag states
+  const [csvDragActive, setCsvDragActive] = useState<boolean>(false);
+  const [jobDescDragActive, setJobDescDragActive] = useState<boolean>(false);
+  const [resumeDragActive, setResumeDragActive] = useState<boolean>(false);
 
-interface FileUpload {
-  file: File;
-  type: 'csv' | 'job-description' | 'resume';
-  status: 'pending' | 'uploading' | 'success' | 'error';
-  error?: string;
-  content?: string;
-}
-
-interface ApiError {
-  message: string;
-  code?: string;
-}
-
-function App(): JSX.Element {
-  const [files, setFiles] = useState<FileUpload[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [apiError, setApiError] = useState<ApiError | null>(null);
-  const [reportHtml, setReportHtml] = useState<string | null>(null);
-  const [activeGenerator, setActiveGenerator] = useState<'ai' | 'python'>('ai');
-
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>, type: 'csv' | 'job-description' | 'resume') => {
-    const newFiles = Array.from(event.target.files || []).map(file => ({
-      file,
-      type,
-      status: 'success' as const // Set all files to success immediately
-    }));
-
-    // Remove existing files of the same type (except for resumes)
-    if (type !== 'resume') {
-      setFiles(prev => prev.filter(f => f.type !== type));
-    }
-
-    // Add the new files to state without trying to read their content
-    setFiles(prev => [...prev, ...newFiles]);
-    setApiError(null);
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file);
+    });
   };
 
-  const removeFile = (index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-    // Clear report if files are removed
-    setReportHtml(null);
-    setApiError(null);
-  };
-
-  const validateFiles = () => {
-    const csvFile = files.find(f => f.type === 'csv');
-    const jobDescription = files.find(f => f.type === 'job-description');
-    const resumes = files.filter(f => f.type === 'resume');
-
-    if (!csvFile) {
-      throw new Error('Please upload a CSV report');
-    }
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError(null);
     
-    if (resumes.length === 0) {
-      throw new Error('Please upload at least one candidate resume');
-    }
-
-    if (activeGenerator === 'ai' && !jobDescription) {
-      throw new Error('Please upload a job description');
-    }
-    
-    return {
-      csvFile: csvFile.file,
-      jobDescriptionFile: jobDescription?.file,
-      resumeFiles: resumes.map(r => r.file)
-    };
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsProcessing(true);
-    setApiError(null);
-    setReportHtml(null);
-
     try {
-      const { csvFile, jobDescriptionFile, resumeFiles } = validateFiles();
-      
-      // Update file statuses to uploading
-      setFiles(prev => prev.map(file => ({ ...file, status: 'uploading' as const })));
-
-      if (activeGenerator === 'ai') {
-        // For AI generator, we need to read file contents
-        let csvContent, jobDescriptionContent, resumeContents;
-        
-        try {
-          // Read CSV content
-          csvContent = await csvFile.text();
-          
-          // Read job description content
-          if (jobDescriptionFile) {
-            jobDescriptionContent = await jobDescriptionFile.text();
-          } else {
-            throw new Error('Job description file is required');
-          }
-          
-          // Read resume contents
-          resumeContents = await Promise.all(
-            resumeFiles.map(async (file) => {
-              try {
-                return await file.text();
-              } catch (error) {
-                console.error(`Error reading resume ${file.name}:`, error);
-                throw new Error(`Failed to read resume: ${file.name}`);
-              }
-            })
-          );
-        } catch (error) {
-          console.error('Error reading file contents:', error);
-          throw new Error(`Failed to read file contents: ${error.message}`);
-        }
-
-        // Add logging before the API call
-        console.log("About to call API with:");
-        console.log("- CSV content exists:", Boolean(csvContent));
-        console.log("- Job description exists:", Boolean(jobDescriptionContent));
-        console.log("- Resume contents count:", resumeContents.length);
-
-        // Generate report using Anthropic API
-        const report = await generateCandidateReport(
-          csvContent,
-          jobDescriptionContent,
-          resumeContents
-        );
-
-        setReportHtml(report);
-      } else {
-        // Python generator - send files directly
-        const formData = new FormData();
-        formData.append('csvFile', csvFile);
-        resumeFiles.forEach(file => {
-          formData.append('pdfFiles', file);
-        });
-        
-        const response = await axios.post('/api/generate-report-python', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          },
-          timeout: 300000 // 5 minute timeout
-        });
-        
-        if (response.data.success) {
-          setReportHtml(response.data.data);
-        } else {
-          throw new Error(response.data.error?.message || 'An error occurred');
-        }
+      if (!csvFile || !jobDescriptionFile || resumeFiles.length === 0) {
+        throw new Error('Please select all required files');
       }
       
-      setFiles(prev => prev.map(file => ({ ...file, status: 'success' as const })));
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
-      setApiError({
-        message: errorMessage,
-        code: (error as any).code
-      });
-      setFiles(prev => prev.map(file => ({ 
-        ...file, 
-        status: 'error' as const,
-        error: errorMessage
-      })));
+      const csvContent = await readFileAsText(csvFile);
+      const jobDescriptionContent = await readFileAsText(jobDescriptionFile);
+      const resumeContents = await Promise.all(resumeFiles.map(readFileAsText));
+      
+      const report = await generateCandidateReport(
+        csvContent,
+        jobDescriptionContent,
+        resumeContents
+      );
+      
+      setReportHtml(report);
+    } catch (err: any) {
+      console.error('Error:', err);
+      setError(err.message || 'Failed to generate report');
     } finally {
-      setIsProcessing(false);
+      setIsLoading(false);
     }
   };
-
-  const renderFileList = (type: 'csv' | 'job-description' | 'resume') => {
-    const filteredFiles = files.filter(file => file.type === type);
-    if (filteredFiles.length === 0) return null;
-
-    const titles = {
-      csv: 'CSV Report',
-      'job-description': 'Job Description',
-      resume: 'Candidate Resumes'
-    };
-
-    const icons = {
-      csv: Table,
-      'job-description': Briefcase,
-      resume: FileText
-    };
-
-    const Icon = icons[type];
-
-    return (
-      <div className="mb-4 last:mb-0">
-        <div className="flex items-center space-x-2 mb-2">
-          <Icon className="h-4 w-4 text-blue-600" />
-          <h4 className="text-sm font-medium text-gray-700">{titles[type]}</h4>
-        </div>
-        <ul className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-          {filteredFiles.map((file, index) => (
-            <li key={index} className="p-3 flex items-center justify-between hover:bg-gray-50">
-              <div className="flex items-center flex-1 min-w-0 mr-4">
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm text-gray-900 truncate block">
-                    {file.file.name}
-                  </span>
-                  {file.error && (
-                    <span className="text-xs text-red-600">{file.error}</span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-500">
-                  {(file.file.size / 1024 / 1024).toFixed(2)} MB
-                </span>
-                {file.status === 'uploading' ? (
-                  <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
-                ) : file.status === 'success' ? (
-                  <div className="h-2 w-2 bg-green-500 rounded-full" />
-                ) : file.status === 'error' ? (
-                  <div className="h-2 w-2 bg-red-500 rounded-full" />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => removeFile(index)}
-                    className="text-gray-400 hover:text-gray-500"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
+  
+  // Handle drag events
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
   };
-
-  const hasFileOfType = (type: 'csv' | 'job-description' | 'resume') => {
-    return files.some(file => file.type === type);
+  
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>, setDragActive: React.Dispatch<React.SetStateAction<boolean>>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
   };
-
-  const validateFile = (file: File): boolean => {
-    // Check file type
-    if (file.type !== 'application/pdf') {
-      setApiError({
-        message: `File must be a PDF: ${file.name}`,
-        code: 'invalid_file_type'
-      });
-      return false;
-    }
+  
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>, setDragActive: React.Dispatch<React.SetStateAction<boolean>>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+  
+  const handleDrop = async (
+    e: DragEvent<HTMLDivElement>, 
+    fileType: 'csv' | 'jobDesc' | 'resume',
+    setDragActive: React.Dispatch<React.SetStateAction<boolean>>
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
     
-    // Check file size (e.g., limit to 10MB)
-    const maxSize = 10 * 1024 * 1024; // 10MB in bytes
-    if (file.size > maxSize) {
-      setApiError({
-        message: `File too large (max 10MB): ${file.name}`,
-        code: 'file_too_large'
-      });
-      return false;
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      switch (fileType) {
+        case 'csv':
+          // Only accept the first file for CSV
+          if (e.dataTransfer.files[0].name.endsWith('.csv')) {
+            setCsvFile(e.dataTransfer.files[0]);
+          } else {
+            setError('Please upload a CSV file for the candidate data');
+          }
+          break;
+        case 'jobDesc':
+          // Only accept the first file for job description
+          setJobDescriptionFile(e.dataTransfer.files[0]);
+          break;
+        case 'resume':
+          // Accept multiple files for resumes
+          setResumeFiles(Array.from(e.dataTransfer.files));
+          break;
+      }
     }
+  };
+  
+  // Remove file handlers
+  const removeCSVFile = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCsvFile(null);
+    if (csvInputRef.current) {
+      csvInputRef.current.value = '';
+    }
+  };
+  
+  const removeJobDescFile = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setJobDescriptionFile(null);
+    if (jobDescInputRef.current) {
+      jobDescInputRef.current.value = '';
+    }
+  };
+  
+  const removeResumeFile = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newFiles = [...resumeFiles];
+    newFiles.splice(index, 1);
+    setResumeFiles(newFiles);
     
-    return true;
+    // Reset the file input if all files are removed
+    if (newFiles.length === 0 && resumeInputRef.current) {
+      resumeInputRef.current.value = '';
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="bg-blue-600 p-2 rounded-lg">
-                <FileText className="h-8 w-8 text-white" />
+    <div className="App">
+      <header className="App-header">
+        <h1>Candidate Report Generator</h1>
+      </header>
+      
+      <main className="App-main">
+        <form onSubmit={handleSubmit} className="upload-form">
+          <div className="file-inputs-container">
+            {/* CSV File Upload */}
+            <div 
+              className={`file-input-group ${csvDragActive ? 'drag-active' : ''}`}
+              onDragOver={handleDragOver}
+              onDragEnter={(e) => handleDragEnter(e, setCsvDragActive)}
+              onDragLeave={(e) => handleDragLeave(e, setCsvDragActive)}
+              onDrop={(e) => handleDrop(e, 'csv', setCsvDragActive)}
+              onClick={() => csvInputRef.current?.click()}
+            >
+              <h3>CSV File</h3>
+              <div className="drop-area">
+                <p>Drag & drop your CSV file here or click to browse</p>
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                  className="file-input"
+                  onClick={(e) => e.stopPropagation()}
+                />
               </div>
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">TalentHQ</h1>
-                <p className="text-sm text-gray-500">Candidate Report Generator</p>
+              {csvFile && (
+                <p className="file-name">
+                  {csvFile.name}
+                  <span className="remove-file" onClick={removeCSVFile}></span>
+                </p>
+              )}
+            </div>
+            
+            {/* Job Description Upload */}
+            <div 
+              className={`file-input-group ${jobDescDragActive ? 'drag-active' : ''}`}
+              onDragOver={handleDragOver}
+              onDragEnter={(e) => handleDragEnter(e, setJobDescDragActive)}
+              onDragLeave={(e) => handleDragLeave(e, setJobDescDragActive)}
+              onDrop={(e) => handleDrop(e, 'jobDesc', setJobDescDragActive)}
+              onClick={() => jobDescInputRef.current?.click()}
+            >
+              <h3>Job Description</h3>
+              <div className="drop-area">
+                <p>Drag & drop your job description file here or click to browse</p>
+                <input
+                  ref={jobDescInputRef}
+                  type="file"
+                  accept=".txt,.pdf,.docx"
+                  onChange={(e) => setJobDescriptionFile(e.target.files?.[0] || null)}
+                  className="file-input"
+                  onClick={(e) => e.stopPropagation()}
+                />
               </div>
+              {jobDescriptionFile && (
+                <p className="file-name">
+                  {jobDescriptionFile.name}
+                  <span className="remove-file" onClick={removeJobDescFile}></span>
+                </p>
+              )}
+            </div>
+            
+            {/* Resumes Upload */}
+            <div 
+              className={`file-input-group ${resumeDragActive ? 'drag-active' : ''}`}
+              onDragOver={handleDragOver}
+              onDragEnter={(e) => handleDragEnter(e, setResumeDragActive)}
+              onDragLeave={(e) => handleDragLeave(e, setResumeDragActive)}
+              onDrop={(e) => handleDrop(e, 'resume', setResumeDragActive)}
+              onClick={() => resumeInputRef.current?.click()}
+            >
+              <h3>Resumes</h3>
+              <div className="drop-area">
+                <p>Drag & drop resume files here or click to browse</p>
+                <input
+                  ref={resumeInputRef}
+                  type="file"
+                  accept=".txt,.pdf,.docx"
+                  multiple
+                  onChange={(e) => setResumeFiles(Array.from(e.target.files || []))}
+                  className="file-input"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+              {resumeFiles.length > 0 && (
+                <div className="file-names">
+                  <p>{resumeFiles.length} file(s) selected:</p>
+                  <ul>
+                    {resumeFiles.map((file, index) => (
+                      <li key={index}>
+                        {file.name}
+                        <span 
+                          className="remove-file" 
+                          onClick={(e) => removeResumeFile(index, e)}
+                        ></span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <form onSubmit={handleSubmit} className="space-y-8">
-            {/* API Error Display */}
-            {apiError && (
-              <div className="rounded-lg bg-red-50 p-4">
-                <div className="flex items-center">
-                  <AlertCircle className="h-5 w-5 text-red-400 mr-3" />
-                  <div>
-                    <h3 className="text-sm font-medium text-red-800">
-                      Error Processing Request
-                    </h3>
-                    <div className="mt-1 text-sm text-red-700">
-                      <p>{apiError.message}</p>
-                      {apiError.code && (
-                        <p className="mt-1 text-xs font-mono">Error Code: {apiError.code}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
+          
+          <button 
+            type="submit" 
+            className="submit-button"
+            disabled={isLoading || !csvFile || !jobDescriptionFile || resumeFiles.length === 0}
+          >
+            {isLoading ? (
+              <span className="loading-indicator">Generating Report...</span>
+            ) : (
+              'Generate Report'
             )}
-
-            {/* CSV Upload Section */}
-            <div className="border-b border-gray-200 pb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <Table className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-lg font-medium text-gray-900">CSV Report</h2>
-                </div>
-                {hasFileOfType('csv') && (
-                  <div className="flex items-center text-green-600">
-                    <CheckCircle2 className="h-5 w-5 mr-1" />
-                    <span className="text-sm font-medium">File uploaded</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center justify-center w-full">
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <Upload className="w-8 h-8 mb-3 text-gray-400" />
-                    <p className="mb-2 text-sm text-gray-500">
-                      <span className="font-semibold">Click to upload</span> or drag and drop
-                    </p>
-                    <p className="text-xs text-gray-500">CSV file only</p>
-                  </div>
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".csv"
-                    onChange={(e) => handleFileChange(e, 'csv')}
-                  />
-                </label>
-              </div>
-            </div>
-
-            {/* Job Description Upload Section */}
-            <div className="border-b border-gray-200 pb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <Briefcase className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-lg font-medium text-gray-900">Job Description</h2>
-                </div>
-                {hasFileOfType('job-description') && (
-                  <div className="flex items-center text-green-600">
-                    <CheckCircle2 className="h-5 w-5 mr-1" />
-                    <span className="text-sm font-medium">File uploaded</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center justify-center w-full">
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <Upload className="w-8 h-8 mb-3 text-gray-400" />
-                    <p className="mb-2 text-sm text-gray-500">
-                      <span className="font-semibold">Upload Job Description</span>
-                    </p>
-                    <p className="text-xs text-gray-500">PDF file only</p>
-                  </div>
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".pdf"
-                    onChange={(e) => handleFileChange(e, 'job-description')}
-                  />
-                </label>
-              </div>
-            </div>
-
-            {/* Candidate Resumes Upload Section */}
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <Users className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-lg font-medium text-gray-900">Candidate Resumes</h2>
-                </div>
-                {hasFileOfType('resume') && (
-                  <div className="flex items-center text-green-600">
-                    <CheckCircle2 className="h-5 w-5 mr-1" />
-                    <span className="text-sm font-medium">Files uploaded</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center justify-center w-full">
-                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <Upload className="w-8 h-8 mb-3 text-gray-400" />
-                    <p className="mb-2 text-sm text-gray-500">
-                      <span className="font-semibold">Upload Candidate Resumes</span>
-                    </p>
-                    <p className="text-xs text-gray-500">Multiple PDF files allowed (3-5 recommended)</p>
-                  </div>
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".pdf"
-                    multiple
-                    onChange={(e) => handleFileChange(e, 'resume')}
-                  />
-                </label>
-              </div>
-            </div>
-
-            {/* File List */}
-            {files.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Selected Files</h3>
-                <div className="bg-gray-50 rounded-lg p-4 space-y-4">
-                  {renderFileList('csv')}
-                  {renderFileList('job-description')}
-                  {renderFileList('resume')}
-                </div>
-              </div>
-            )}
-
-            {/* Submit Button */}
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={isProcessing || files.length === 0}
-                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                    Processing Files...
-                  </>
-                ) : (
-                  'Generate Report'
-                )}
-              </button>
-            </div>
-          </form>
-        </div>
-
-        {/* Report Display */}
+          </button>
+          
+          {error && <p className="error-message">{error}</p>}
+        </form>
+        
         {reportHtml && (
-          <div className="mt-8">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-              <div 
-                className="prose prose-blue max-w-none"
-                dangerouslySetInnerHTML={{ __html: reportHtml }}
-              />
-            </div>
+          <div className="report-container">
+            <h2>Generated Report</h2>
+            <CopyButton text={reportHtml} />
+            <div 
+              className="report-content"
+              dangerouslySetInnerHTML={{ __html: reportHtml }} 
+            />
           </div>
         )}
       </main>
