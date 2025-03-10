@@ -1,5 +1,6 @@
 import React, { useState, useRef, DragEvent } from 'react';
 import CopyButton from './components/CopyButton';
+import DownloadButton from './components/DownloadButton';
 import { generateCandidateReport } from './lib/api';
 import './App.css'; // Make sure to import your CSS
 
@@ -263,7 +264,10 @@ function App() {
         {reportHtml && (
           <div className="report-container">
             <h2>Generated Report</h2>
-            <CopyButton text={reportHtml} />
+            <div className="report-actions">
+              <CopyButton text={reportHtml} />
+              <DownloadButton htmlContent={reportHtml} />
+            </div>
             <div 
               className="report-content"
               dangerouslySetInnerHTML={{ __html: reportHtml }} 
