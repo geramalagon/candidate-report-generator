@@ -2,6 +2,7 @@ import { config } from '../config/environment';
 import { GoogleAuth } from 'google-auth-library';
 import fetch from 'node-fetch';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { randomUUID } from 'crypto';
 
 // Initialize Google Auth client
 const auth = new GoogleAuth({
@@ -212,4 +213,20 @@ export async function generateContent(prompt: string) {
 // You can add more exported functions here
 export async function otherFunction() {
   // ... implementation
-} 
+}
+
+// Top of your server file
+import { randomUUID } from 'crypto';
+
+app.use((req, res, next) => {
+  const requestId = randomUUID();
+  console.log(`[${requestId}] Request received: ${req.method} ${req.url}`);
+  
+  // Track request timing
+  const start = Date.now();
+  res.on('finish', () => {
+    console.log(`[${requestId}] Response sent: ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  
+  next();
+}); 
