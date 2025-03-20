@@ -98,8 +98,8 @@ export async function generateContent(prompt: string) {
     // Initialize the Google Generative AI client
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Use the correct model name - gemini-1.5-flash
-    const modelName = "gemini-1.5-flash";
+    // Use the correct model name - gemini-2.0-flash
+    const modelName = "gemini-2.0-flash";
     console.log(`Using model: ${modelName}`);
     
     // For text-only input, use the correct model
@@ -138,7 +138,7 @@ export async function generateContent(prompt: string) {
     try {
       // Generate content
       const result = await model.generateContent({
-        contents: [{ parts: [{ text: prompt }] }]
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
       });
       
       console.log("Response received from Gemini API");
@@ -172,7 +172,7 @@ export async function generateContent(prompt: string) {
           }
         ]
       };
-    } catch (apiError) {
+    } catch (apiError: any) {
       console.error("Error during Gemini API call:", apiError);
       
       // Handle specific API errors
@@ -193,7 +193,7 @@ export async function generateContent(prompt: string) {
         details: errorDetails
       };
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error in generateContent:", error);
     
     // Log more details about the error
