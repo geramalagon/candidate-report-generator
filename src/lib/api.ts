@@ -30,31 +30,36 @@ export async function generateCandidateReport(
     });
 
     if (!response.ok) {
-      const errorResponse = response.clone();
+      // Clone the response before reading it
+      const errorResponseClone = response.clone();
+      
+      // Try to parse error as JSON, but be prepared for non-JSON responses
       try {
         const errorData = await response.json();
         throw new Error(errorData.error?.message || 'Failed to generate report');
       } catch (parseError) {
         // If response is not JSON, get it as text from the clone
-        const errorText = await errorResponse.text();
+        const errorText = await errorResponseClone.text();
         throw new Error(`Server error: ${errorText.substring(0, 100)}...`);
       }
     }
 
     // Check content type to determine how to process the response
     const contentType = response.headers.get('Content-Type');
-    const responseClone = response.clone();
     
     if (contentType && contentType.includes('text/html')) {
       // Return HTML directly
       return await response.text();
     } else {
+      // Clone the response before attempting to read as JSON
+      const responseClone = response.clone();
+      
       // Process as JSON
       try {
         const data = await response.json();
         return data.data || data;
       } catch (parseError) {
-        // Fallback to text if JSON parsing fails
+        // Fallback to text if JSON parsing fails (using the clone)
         return await responseClone.text();
       }
     }
