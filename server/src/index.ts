@@ -294,7 +294,7 @@ Please generate a complete HTML report following this structure, using the provi
     const result = await generateContent(fullPrompt);
     
     // Check if there was an error
-    if (result.error) {
+    if ('error' in result) {
       console.error("Error from generateContent:", result.error);
       res.status(500).json({
         success: false,
