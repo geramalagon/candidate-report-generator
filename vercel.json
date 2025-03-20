@@ -3,7 +3,11 @@
   "builds": [
     {
       "src": "server/src/index.ts",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["server/src/**", "server/prompt.txt", "server/example_output.html"],
+        "tsconfigPath": "server/tsconfig.json"
+      }
     },
     {
       "src": "package.json",
@@ -23,5 +27,8 @@
       "src": "/(.*)",
       "dest": "/dist/$1"
     }
-  ]
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
 } 
