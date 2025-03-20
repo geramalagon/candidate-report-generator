@@ -10,7 +10,14 @@ export async function generateCandidateReport(
     console.log("- Job description length:", jobDescriptionContent?.length || 0);
     console.log("- Number of resumes:", resumeContents?.length || 0);
     
-    const response = await fetch('http://localhost:3001/api/generate-report', {
+    // Use a relative URL in production, localhost in development
+    const apiUrl = import.meta.env.PROD 
+      ? '/api/generate-report'  // Production: use relative path
+      : 'http://localhost:3001/api/generate-report'; // Development: use localhost
+    
+    console.log("Using API URL:", apiUrl);
+    
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
