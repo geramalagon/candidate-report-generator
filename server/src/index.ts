@@ -329,10 +329,9 @@ Please generate a complete HTML report following this structure, using the provi
       return;
     }
 
-    res.json({
-      success: true,
-      data: generatedText
-    });
+    // Send the HTML directly instead of wrapping it in JSON
+    res.setHeader('Content-Type', 'text/html');
+    res.send(generatedText);
 
   } catch (error: any) {
     console.error("Error in generateReport:", error);
@@ -428,10 +427,9 @@ app.post('/api/generate-report-python',
       }
       */
 
-      res.json({
-        success: true,
-        data: stdout
-      });
+      // Send the HTML directly instead of wrapping it in JSON
+      res.setHeader('Content-Type', 'text/html');
+      res.send(stdout);
     });
   }
 );
@@ -456,7 +454,7 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
     }
 
     // Make a simple test request to the Gemini API
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',
