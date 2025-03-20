@@ -87,77 +87,112 @@ export async function generateContent(prompt: string) {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) {
     console.error("GOOGLE_API_KEY is not set in environment variables");
-    throw new Error("API key is not configured");
+    // Return structured error instead of throwing
+    return {
+      error: "API key is not configured",
+      details: "The GOOGLE_API_KEY environment variable is not set"
+    };
   }
   
   try {
     // Initialize the Google Generative AI client
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // For text-only input, use the gemini-pro model
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    // Use the correct model name - gemini-1.5-flash
+    const modelName = "gemini-1.5-flash";
+    console.log(`Using model: ${modelName}`);
     
-    console.log("Using model: gemini-pro");
-    
-    // Configure safety settings
-    const safetySettings = [
-      {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-      },
-    ];
-    
-    // Configure generation parameters
-    const generationConfig = {
-      temperature: 0.4,
-      topK: 32,
-      topP: 1,
-      maxOutputTokens: 8192,
-    };
+    // For text-only input, use the correct model
+    const model = genAI.getGenerativeModel({ 
+      model: modelName,
+      // Configure safety settings
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+          threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+          threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+          threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        },
+      ],
+      // Configure generation parameters
+      generationConfig: {
+        temperature: 0.4,
+        topK: 32,
+        topP: 1,
+        maxOutputTokens: 8192,
+      }
+    });
     
     console.log("Sending request to Gemini API...");
     
-    // Generate content
-    const result = await model.generateContent({
-      contents: [{ parts: [{ text: prompt }] }],
-      safetySettings,
-      generationConfig,
-    });
-    
-    console.log("Response received from Gemini API");
-    
-    // Log response details
-    const response = result.response;
-    console.log("Response has text:", Boolean(response.text()));
-    console.log("Response text length:", response.text().length);
-    console.log("Response text sample:", response.text().substring(0, 500) + "...");
-    
-    // Format the response to match the expected structure
-    return {
-      candidates: [
-        {
-          content: {
-            parts: [
-              {
-                text: response.text()
-              }
-            ]
+    try {
+      // Generate content
+      const result = await model.generateContent({
+        contents: [{ parts: [{ text: prompt }] }]
+      });
+      
+      console.log("Response received from Gemini API");
+      
+      // Check if response is valid
+      if (!result || !result.response) {
+        console.error("Invalid response from Gemini API:", result);
+        return {
+          error: "Invalid response from Gemini API",
+          details: result
+        };
+      }
+      
+      // Log response details
+      const response = result.response;
+      console.log("Response has text:", Boolean(response.text()));
+      console.log("Response text length:", response.text().length);
+      console.log("Response text sample:", response.text().substring(0, 500) + "...");
+      
+      // Format the response to match the expected structure
+      return {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: response.text()
+                }
+              ]
+            }
           }
-        }
-      ]
-    };
+        ]
+      };
+    } catch (apiError) {
+      console.error("Error during Gemini API call:", apiError);
+      
+      // Handle specific API errors
+      let errorMessage = "Error calling Gemini API";
+      let errorDetails = apiError;
+      
+      if (apiError.message && apiError.message.includes("404")) {
+        errorMessage = "Model not found. Please check the model name.";
+      } else if (apiError.message && apiError.message.includes("401")) {
+        errorMessage = "Unauthorized. Please check your API key.";
+      } else if (apiError.message && apiError.message.includes("quota")) {
+        errorMessage = "API quota exceeded. Please try again later.";
+      }
+      
+      // Return structured error
+      return {
+        error: errorMessage,
+        details: errorDetails
+      };
+    }
   } catch (error) {
     console.error("Error in generateContent:", error);
     
@@ -166,7 +201,11 @@ export async function generateContent(prompt: string) {
       console.error("Error response:", error.response.data);
     }
     
-    throw error;
+    // Return structured error instead of throwing
+    return {
+      error: "Failed to generate content",
+      details: error.message || String(error)
+    };
   }
 }
 

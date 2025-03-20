@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { VertexAI } from '@google-cloud/vertexai';
 import dotenv from 'dotenv';
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import pdf from 'pdf-parse';
 import { config, validateConfig } from './config/environment';
 import { fetchData, generateContent } from './utils/apiClient';
@@ -12,6 +12,9 @@ import fs from 'fs';
 import { exec } from 'child_process';
 import fetch from 'node-fetch';
 import os from 'os';
+
+// Import express-async-errors at the top to catch unhandled promise rejections
+import 'express-async-errors';
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -118,6 +121,7 @@ async function extractTextFromBase64PDF(base64String: string): Promise<string> {
 // Update the generateReport function with better debugging
 const generateReport = async (req: Request, res: Response): Promise<void> => {
   try {
+    console.log("Received generate-report request");
     const { csvContent, jobDescriptionContent, resumeContents } = req.body as GenerateReportRequest;
 
     // Validate inputs with more detailed logging
@@ -133,6 +137,7 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
     }
 
     if (!csvContent || !jobDescriptionContent || !resumeContents || resumeContents.length === 0) {
+      console.error("Missing required input files");
       res.status(400).json({
         success: false,
         error: {
@@ -153,7 +158,9 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
     // Read the prompt from the file - CHECK THIS PATH
     const promptFilePath = path.join(__dirname, '..', 'prompt.txt');
     console.log("Looking for prompt file at:", promptFilePath);
-    let promptTemplate: string;
+    // Initialize with empty string to avoid "used before assigned" errors
+    let promptTemplate = '';
+
     try {
       promptTemplate = fs.readFileSync(promptFilePath, 'utf8');
       console.log("Prompt template loaded, length:", promptTemplate.length);
@@ -162,6 +169,7 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       console.error('Error reading prompt file:', readError);
       console.error('Current directory:', __dirname);
       console.error('Attempted path:', promptFilePath);
+      
       // Try alternative locations
       const altPaths = [
         path.join(__dirname, 'prompt.txt'),
@@ -174,31 +182,29 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       for (const altPath of altPaths) {
         try {
           console.log("Trying:", altPath);
-          promptTemplate = fs.readFileSync(altPath, 'utf8');
-          console.log("Found prompt at:", altPath);
-          found = true;
-          break;
+          const content = fs.readFileSync(altPath, 'utf8');
+          if (content) {
+            promptTemplate = content;
+            console.log("Found prompt at:", altPath);
+            found = true;
+            break;
+          }
         } catch (e) {
           console.log("Not found at:", altPath);
         }
       }
       
       if (!found) {
-        res.status(500).json({
-          success: false,
-          error: {
-            type: 'server_error',
-            message: 'Failed to read the prompt file.'
-          }
-        });
-        return;
+        throw new Error('Failed to read the prompt file');
       }
     }
 
     // Read the example output HTML file - CHECK THIS PATH
     const exampleOutputPath = path.join(__dirname, '..', 'example_output.html');
     console.log("Looking for example output file at:", exampleOutputPath);
-    let exampleOutput: string;
+    // Initialize with empty string to avoid "used before assigned" errors
+    let exampleOutput = '';
+
     try {
       exampleOutput = fs.readFileSync(exampleOutputPath, 'utf8');
       console.log("Example output loaded, length:", exampleOutput.length);
@@ -219,24 +225,20 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       for (const altPath of altPaths) {
         try {
           console.log("Trying:", altPath);
-          exampleOutput = fs.readFileSync(altPath, 'utf8');
-          console.log("Found example output at:", altPath);
-          found = true;
-          break;
+          const content = fs.readFileSync(altPath, 'utf8');
+          if (content) {
+            exampleOutput = content;
+            console.log("Found example output at:", altPath);
+            found = true;
+            break;
+          }
         } catch (e) {
           console.log("Not found at:", altPath);
         }
       }
       
       if (!found) {
-        res.status(500).json({
-          success: false,
-          error: {
-            type: 'server_error',
-            message: 'Failed to read the example output file.'
-          }
-        });
-        return;
+        throw new Error('Failed to read the example output file');
       }
     }
 
@@ -285,8 +287,25 @@ Please generate a complete HTML report following this structure, using the provi
 
     // Log the API call we're about to make
     console.log("Calling generateContent with prompt length:", fullPrompt.length);
+    console.log("First 200 chars:", fullPrompt.substring(0, 200));
+    console.log("Last 200 chars:", fullPrompt.substring(fullPrompt.length - 200));
 
+    // Call the Gemini API
     const result = await generateContent(fullPrompt);
+    
+    // Check if there was an error
+    if (result.error) {
+      console.error("Error from generateContent:", result.error);
+      res.status(500).json({
+        success: false,
+        error: {
+          type: 'api_error',
+          message: result.error,
+          details: result.details
+        }
+      });
+      return;
+    }
 
     console.log("API response received");
     console.log("Response has candidates:", Boolean(result.candidates));
@@ -299,7 +318,15 @@ Please generate a complete HTML report following this structure, using the provi
     console.log("Generated text sample:", generatedText.substring(0, 200) + "...");
 
     if (!generatedText) {
-      throw new Error('No content generated from the model');
+      console.error("No content generated from the model");
+      res.status(500).json({
+        success: false,
+        error: {
+          type: 'generation_error',
+          message: 'No content generated from the model'
+        }
+      });
+      return;
     }
 
     res.json({
@@ -308,13 +335,20 @@ Please generate a complete HTML report following this structure, using the provi
     });
 
   } catch (error: any) {
-    console.error('Server Error:', error);
-    console.error('Error details:', error.stack);
+    console.error("Error in generateReport:", error);
+    console.error("Error stack:", error.stack);
+    
+    // Log more details about the error
+    if (error.response) {
+      console.error("Error response:", error.response.data);
+    }
+    
     res.status(500).json({
       success: false,
       error: {
         type: 'server_error',
-        message: error.message
+        message: error.message || 'An error occurred while generating the report',
+        details: error.response?.data || error
       }
     });
   }
@@ -480,6 +514,23 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
     });
     return;
   }
+});
+
+// Global error handler for Express
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Unhandled server error:', err);
+  console.error('Error stack:', err.stack);
+  
+  // Always return JSON
+  res.status(500).json({
+    success: false,
+    error: {
+      type: 'unhandled_server_error',
+      message: config.environment === 'production' 
+        ? 'An unexpected error occurred on the server'
+        : err.message || 'An unexpected error occurred on the server'
+    }
+  });
 });
 
 const PORT = process.env.PORT || 3001;
