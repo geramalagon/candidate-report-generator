@@ -541,10 +541,51 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
   }
 });
 
-// Add a new endpoint for testing base64 encoding
+// Add a simple GET endpoint for encoding test
+app.get('/api/test-encoding', (req: Request, res: Response) => {
+  try {
+    console.log('Received GET test-encoding request');
+    
+    // Pre-defined test data
+    const testData = {
+      simple: "Hello, world!",
+      withSpecialChars: "Special chars: !@#$%^&*()_+{}|:<>?",
+      withEmoji: "With emoji: 🚀🔥🌟",
+      withNewlines: "Line 1\nLine 2\r\nLine 3",
+      withUnicode: "Unicode: 你好, مرحبا, こんにちは"
+    };
+    
+    const results: Record<string, string> = {};
+    
+    // Encode each test string to base64
+    for (const [key, value] of Object.entries(testData)) {
+      try {
+        results[key] = Buffer.from(value, 'utf-8').toString('base64');
+      } catch (encodeError) {
+        console.error(`Error encoding value for key ${key}:`, encodeError);
+        results[key] = `ERROR: ${(encodeError as Error).message}`;
+      }
+    }
+    
+    console.log('GET encoding test complete, returning results');
+    res.json({
+      success: true,
+      message: 'Encoding test completed successfully',
+      results
+    });
+  } catch (error) {
+    console.error('Error in GET encoding test endpoint:', error);
+    res.status(500).json({ 
+      error: 'Failed to encode test data', 
+      message: (error as Error).message
+    });
+  }
+});
+
+// Add a POST endpoint for testing base64 encoding with custom data
 app.post('/api/test-encoding', (req: Request, res: Response) => {
   try {
-    console.log('Received test-encoding request');
+    console.log('Received POST test-encoding request');
     console.log('Request body type:', typeof req.body);
     console.log('Request body:', JSON.stringify(req.body).substring(0, 200));
     
@@ -575,10 +616,10 @@ app.post('/api/test-encoding', (req: Request, res: Response) => {
       }
     }
     
-    console.log('Encoding complete. Returning results.');
+    console.log('POST encoding test complete, returning results');
     res.json(results);
   } catch (error) {
-    console.error('Error in encoding test endpoint:', error);
+    console.error('Error in POST encoding test endpoint:', error);
     res.status(500).json({ 
       error: 'Failed to encode test data', 
       message: (error as Error).message,
