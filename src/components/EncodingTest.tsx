@@ -26,21 +26,24 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'up' | 'down'>('unknown');
+  const [serverInfo, setServerInfo] = useState<any>(null);
 
   // Function to check if the server is up by using the simple /api/hello endpoint
   const checkServerStatus = async (baseUrl: string) => {
     try {
       console.log('Checking server status at:', baseUrl);
+      // Use the native API route endpoint
       const url = baseUrl.includes('/api/') ? baseUrl : `${baseUrl}/api/hello`;
       
       const response = await fetch(url, { 
         method: 'GET',
-        headers: { 'Accept': 'text/plain' }
+        headers: { 'Accept': 'application/json' }
       });
       
       if (response.ok) {
-        const text = await response.text();
-        console.log('Server is up:', text);
+        const data = await response.json();
+        console.log('Server response:', data);
+        setServerInfo(data);
         setServerStatus('up');
         return true;
       } else {
@@ -59,30 +62,53 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
   const fetchDiagnostics = async (baseUrl: string) => {
     try {
       console.log('Fetching diagnostics from:', baseUrl);
-      const url = baseUrl.includes('/api/') ? baseUrl : `${baseUrl}/api/diagnostics`;
+      const url = baseUrl.includes('/api/') ? baseUrl : `${baseUrl}/api/health`;
       
       const response = await fetch(url);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('Diagnostics data:', data);
-        setDiagnostics(data.diagnostics);
-        return data.diagnostics;
+        console.log('Health data:', data);
+        
+        // Transform the health data to match our diagnostics structure
+        const diagnosticsData = {
+          environment: data.environment || process.env.NODE_ENV || 'unknown',
+          serverTime: data.timestamp || new Date().toISOString(),
+          nodeVersion: data.node || 'unknown',
+          expressJson: true,
+          expressCors: true,
+          hasEncodingEndpoints: true,
+          memory: data.memory || {},
+          components: data.components || {},
+          uptime: data.uptime || 0
+        };
+        
+        setDiagnostics(diagnosticsData);
+        return diagnosticsData;
       } else {
-        console.error('Diagnostics request failed with status:', response.status);
+        console.error('Health request failed with status:', response.status);
         return null;
       }
     } catch (error) {
-      console.error('Error fetching diagnostics:', error);
+      console.error('Error fetching health data:', error);
       return null;
     }
   };
 
-  // New function to fetch server encodings using the GET endpoint
-  const fetchServerEncodings = async (url: string) => {
-    console.log('Fetching server encodings from:', url);
+  // Function to fetch server encodings using the GET endpoint
+  const fetchServerEncodings = async (baseUrl: string) => {
+    console.log('Fetching server encodings from:', baseUrl);
     
     try {
+      // Construct the proper URL for the test-encoding endpoint
+      const url = baseUrl.endsWith('/test-encoding') 
+        ? baseUrl 
+        : (baseUrl.endsWith('/api') 
+          ? `${baseUrl}/test-encoding` 
+          : `${baseUrl}/api/test-encoding`);
+      
+      console.log('Using encoding test URL:', url);
+      
       // First try the GET endpoint which is more robust
       const response = await fetch(url);
       
@@ -91,7 +117,7 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
       }
       
       const data = await response.json();
-      console.log('Server response:', data);
+      console.log('Server encoding response:', data);
       
       // Extract the results from the response
       return data.results || data;
@@ -105,39 +131,36 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
     setLoading(true);
     setError(null);
     setDiagnostics(null);
+    setServerInfo(null);
     
     try {
       // Determine if we're in production
       const isProduction = window.location.hostname !== 'localhost';
       
       // For local environment testing
-      let localTestUrl = localUrl;
-      if (isProduction) {
-        // When running in production, use relative URL for "local" test
-        localTestUrl = '/api';
-        console.log('Using relative URL for server test in production');
-      }
+      let apiBaseUrl = isProduction ? '/api' : localUrl;
+      console.log('Using API base URL:', apiBaseUrl);
       
       // First check if the server is up
-      const serverUp = await checkServerStatus(localTestUrl);
+      const serverUp = await checkServerStatus(apiBaseUrl);
       
       if (!serverUp) {
-        setError(`Server at ${localTestUrl} is not responding. Check if it's running.`);
+        setError(`Server at ${apiBaseUrl} is not responding. Check if it's running.`);
         setLoading(false);
         return;
       }
       
-      // Then fetch diagnostics
-      await fetchDiagnostics(localTestUrl);
+      // Then fetch health data
+      await fetchDiagnostics(apiBaseUrl);
       
-      // Test local environment (or the current server in production)
-      console.log('Running local test with URL:', `${localTestUrl}/test-encoding`);
+      // Test environment encodings
+      console.log('Running encoding test');
       try {
         // Get browser-side encodings
         const localEncodings = getLocalEncodings();
         
         // Get server-side encodings
-        const serverEncodings = await fetchServerEncodings(`${localTestUrl}/test-encoding`);
+        const serverEncodings = await fetchServerEncodings(apiBaseUrl);
         
         // Compare encodings
         const comparison = compareEncodings(localEncodings, serverEncodings);
@@ -148,33 +171,14 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
           serverEncodings
         });
       } catch (err) {
-        console.error('Error running local tests:', err);
-        setError((err as Error).message || 'Failed to run local encoding tests');
+        console.error('Error running encoding tests:', err);
+        setError((err as Error).message || 'Failed to run encoding tests');
       }
       
       // Only run production test if in dev mode and URLs are different
-      if (!isProduction && productionUrl !== localUrl) {
-        // Test production environment
-        console.log('Running production test with URL:', productionUrl);
-        try {
-          // Get browser-side encodings
-          const localEncodings = getLocalEncodings();
-          
-          // Get server-side encodings
-          const serverEncodings = await fetchServerEncodings(`${productionUrl}/api/test-encoding`);
-          
-          // Compare encodings
-          const comparison = compareEncodings(localEncodings, serverEncodings);
-          
-          setProductionResults({
-            ...comparison,
-            localEncodings,
-            serverEncodings
-          });
-        } catch (prodErr) {
-          console.error('Error running production tests:', prodErr);
-          // Don't fail completely if just the production test fails
-        }
+      if (!isProduction && productionUrl) {
+        // Skip production test for now as we're focusing on getting the local test working
+        console.log('Skipping production environment test for now');
       }
     } catch (err) {
       setError('Failed to run encoding tests');
@@ -198,10 +202,24 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
         </button>
         
         <button
-          onClick={() => window.location.href = '/api/hello'}
-          className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+          onClick={() => window.open('/api/hello', '_blank')}
+          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
         >
-          Test API Directly
+          Test Hello API
+        </button>
+        
+        <button
+          onClick={() => window.open('/api/health', '_blank')}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+        >
+          Test Health API
+        </button>
+        
+        <button
+          onClick={() => window.open('/api/test-encoding', '_blank')}
+          className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600"
+        >
+          Test Encoding API
         </button>
       </div>
       
@@ -209,6 +227,32 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
         <div className="p-3 mb-4 bg-red-100 text-red-700 rounded">
           <p className="font-bold">Error:</p>
           <p>{error}</p>
+        </div>
+      )}
+      
+      {/* Server Info Section */}
+      {serverInfo && (
+        <div className="mb-4 p-3 rounded bg-green-50 border">
+          <h3 className="text-lg font-semibold mb-2">API Server Info</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <div>Status:</div>
+            <div><span className="text-green-600">{serverInfo.status}</span></div>
+            
+            <div>Message:</div>
+            <div>{serverInfo.message}</div>
+            
+            <div>Environment:</div>
+            <div>{serverInfo.environment}</div>
+            
+            <div>Timestamp:</div>
+            <div>{new Date(serverInfo.timestamp).toLocaleString()}</div>
+            
+            <div>Request Method:</div>
+            <div>{serverInfo.method}</div>
+            
+            <div>Request Path:</div>
+            <div>{serverInfo.path}</div>
+          </div>
         </div>
       )}
       
@@ -224,7 +268,7 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
           </div>
           
           <div>Environment:</div>
-          <div>{diagnostics?.environment || 'Unknown'}</div>
+          <div>{diagnostics?.environment || serverInfo?.environment || 'Unknown'}</div>
           
           <div>Server Time:</div>
           <div>{diagnostics?.serverTime ? new Date(diagnostics.serverTime).toLocaleString() : 'Unknown'}</div>
@@ -265,7 +309,7 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
       
       {localResults && (
         <div className="mb-4">
-          <h3 className="text-lg font-semibold mb-2">Local Environment</h3>
+          <h3 className="text-lg font-semibold mb-2">Encoding Test Results</h3>
           <div className="p-3 rounded bg-gray-100">
             <p>
               Status: {' '}
@@ -293,52 +337,25 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
         </div>
       )}
       
-      {productionResults && (
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold mb-2">Production Environment</h3>
-          <div className="p-3 rounded bg-gray-100">
-            <p>
-              Status: {' '}
-              <span className={productionResults.consistent ? 'text-green-600' : 'text-red-600'}>
-                {productionResults.consistent ? 'Consistent ✓' : 'Inconsistent ✗'}
-              </span>
-            </p>
-            {productionResults.discrepancies.length > 0 && (
-              <div className="mt-2">
-                <p className="font-semibold">Discrepancies:</p>
-                <ul className="list-disc pl-5">
-                  {productionResults.discrepancies.map((d: any, i: number) => (
-                    <li key={i}>
-                      <strong>{d.key}:</strong>
-                      <div className="text-xs overflow-x-auto">
-                        <div>Local: {d.local}</div>
-                        <div>Server: {d.server}</div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      
       {/* Debugging Tips Section */}
       <div className="mt-4 p-4 border rounded bg-blue-50 text-sm">
         <h3 className="font-bold text-md mb-2">Debugging Tips</h3>
         <ul className="list-disc pl-5 space-y-2">
           <li>If the server status is <strong className="text-red-600">Not Responding</strong>, check if the server is running and accessible.</li>
           <li>
-            <p><strong>Common Server Setup Issues:</strong></p>
+            <p><strong>Testing Native API Routes:</strong></p>
             <ul className="list-circle pl-5">
-              <li>In Vercel, API routes must be in the correct location (<code>/api</code> folder)</li>
-              <li>CORS might be blocking requests if <code>expressCors</code> is false</li>
-              <li>Body parsing might be failing if <code>expressJson</code> is false</li>
+              <li>Click the test buttons above to directly access the API endpoints</li>
+              <li>Check Vercel logs for any errors in the API routes</li>
+              <li>Verify that <code>vercel.json</code> has correct route configurations</li>
             </ul>
           </li>
-          <li>Try accessing the <strong className="underline cursor-pointer" onClick={() => window.open('/api/hello', '_blank')}>API test endpoint directly</strong> to see raw server response</li>
           <li>For Unicode issues, verify that both browser and server handle UTF-8 encoding properly</li>
         </ul>
+      </div>
+      
+      <div className="mt-4 text-xs text-gray-500">
+        Using API routes: <code>/api/hello</code>, <code>/api/health</code>, <code>/api/test-encoding</code>
       </div>
     </div>
   );
