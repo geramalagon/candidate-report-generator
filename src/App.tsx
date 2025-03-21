@@ -30,6 +30,20 @@ function App() {
     });
   };
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result as string;
+        // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
+        const base64Content = result.split(',')[1] || result;
+        resolve(base64Content);
+      };
+      reader.onerror = (e) => reject(e);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
@@ -42,7 +56,13 @@ function App() {
       
       const csvContent = await readFileAsText(csvFile);
       const jobDescriptionContent = await readFileAsText(jobDescriptionFile);
-      const resumeContents = await Promise.all(resumeFiles.map(readFileAsText));
+      
+      // Read resume files as base64 for PDFs, text for other formats
+      const resumeContents = await Promise.all(resumeFiles.map(file => {
+        return file.type === 'application/pdf' 
+          ? readFileAsBase64(file) 
+          : readFileAsText(file);
+      }));
       
       const report = await generateCandidateReport(
         csvContent,
