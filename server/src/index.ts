@@ -242,8 +242,35 @@ const generateReport = async (req: Request, res: Response): Promise<void> => {
       }
     }
 
+    // Process resume contents - check for and decode base64 PDFs
+    const processedResumeContents = await Promise.all(resumeContents.map(async (content, index) => {
+      try {
+        // Check if content appears to be base64 encoded
+        const isBase64 = /^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)?$/.test(content.trim());
+        
+        if (isBase64) {
+          console.log(`Resume ${index+1} appears to be base64 encoded, attempting to extract text...`);
+          try {
+            const extractedText = await extractTextFromBase64PDF(content);
+            console.log(`Successfully extracted text from resume ${index+1}, length: ${extractedText.length}`);
+            return extractedText;
+          } catch (extractError) {
+            console.error(`Failed to extract text from base64 PDF for resume ${index+1}:`, extractError);
+            console.log('Falling back to using raw content');
+            return content;
+          }
+        } else {
+          console.log(`Resume ${index+1} appears to be plain text, using as-is`);
+          return content;
+        }
+      } catch (error) {
+        console.error(`Error processing resume ${index+1}:`, error);
+        return content; // Fall back to original content if processing fails
+      }
+    }));
+
     // Insert the actual file contents into the prompt
-    const candidateDataSection = resumeContents.map((resume, index) => `
+    const candidateDataSection = processedResumeContents.map((resume, index) => `
 <candidate${index + 1}>
 ${resume}
 </candidate${index + 1}>
@@ -511,30 +538,6 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
       }
     });
     return;
-  }
-});
-
-// Add this new endpoint for base64 encoding testing
-app.post('/api/test-encoding', (req: Request, res: Response) => {
-  try {
-    const testData = req.body;
-    const results: Record<string, string> = {};
-    
-    for (const [key, value] of Object.entries(testData)) {
-      if (typeof value === 'string') {
-        // Use Buffer for consistent base64 encoding in Node.js
-        const buffer = Buffer.from(value, 'utf-8');
-        results[key] = buffer.toString('base64');
-      }
-    }
-    
-    res.json(results);
-  } catch (error) {
-    console.error('Error in test-encoding endpoint:', error);
-    res.status(500).json({
-      error: 'Failed to encode test data',
-      details: (error as Error).message
-    });
   }
 });
 
