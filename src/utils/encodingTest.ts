@@ -5,7 +5,7 @@
 /**
  * Test data with various characters to ensure encoding handles different types of content
  */
-const TEST_DATA = {
+export const TEST_DATA = {
   simple: "Hello, world!",
   withSpecialChars: "Special chars: !@#$%^&*()_+{}|:<>?",
   withEmoji: "With emoji: 🚀🔥🌟",
@@ -24,42 +24,6 @@ export function getLocalEncodings(): Record<string, string> {
   }
   
   return results;
-}
-
-/**
- * Fetches base64 encodings from server for comparison
- */
-export async function getServerEncodings(apiUrl: string): Promise<Record<string, string>> {
-  try {
-    // Construct a proper URL that works in both development and production
-    // If the URL already contains http:// or https://, use it as is
-    // Otherwise, assume it's a relative URL or path
-    let fullUrl = apiUrl;
-    if (!apiUrl.includes('/api/')) {
-      fullUrl = `${apiUrl}/api/test-encoding`;
-    } else {
-      fullUrl = apiUrl; // URL already contains the endpoint
-    }
-
-    console.log('Making encoding test request to:', fullUrl);
-    
-    const response = await fetch(fullUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(TEST_DATA)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Server responded with status ${response.status}`);
-    }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('Error testing server encodings:', error);
-    throw error;
-  }
 }
 
 /**
@@ -89,25 +53,5 @@ export function compareEncodings(
   return {
     consistent: discrepancies.length === 0,
     discrepancies
-  };
-}
-
-/**
- * Run the full encoding test against a server
- */
-export async function testEncodingConsistency(apiUrl: string): Promise<{
-  consistent: boolean;
-  discrepancies: Array<{ key: string, local: string, server: string }>;
-  localEncodings: Record<string, string>;
-  serverEncodings: Record<string, string>;
-}> {
-  const localEncodings = getLocalEncodings();
-  const serverEncodings = await getServerEncodings(apiUrl);
-  const comparison = compareEncodings(localEncodings, serverEncodings);
-  
-  return {
-    ...comparison,
-    localEncodings,
-    serverEncodings
   };
 } 

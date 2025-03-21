@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { testEncodingConsistency } from '../utils/encodingTest';
+import React, { useState } from 'react';
+import { getLocalEncodings, compareEncodings } from '../utils/encodingTest';
 
 interface EncodingTestProps {
   productionUrl?: string;
@@ -15,6 +15,29 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // New function to fetch server encodings using the GET endpoint
+  const fetchServerEncodings = async (url: string) => {
+    console.log('Fetching server encodings from:', url);
+    
+    try {
+      // First try the GET endpoint which is more robust
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`Server responded with status ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Server response:', data);
+      
+      // Extract the results from the response
+      return data.results || data;
+    } catch (error) {
+      console.error('Error fetching server encodings:', error);
+      throw error;
+    }
+  };
+
   const runTests = async () => {
     setLoading(true);
     setError(null);
@@ -26,7 +49,7 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
       // For local environment testing
       let localTestUrl = localUrl;
       if (isProduction) {
-        // When running in production, use relative URLs for "local" test
+        // When running in production, use relative URL for "local" test
         localTestUrl = '/api/test-encoding';
         console.log('Using relative URL for server test in production');
       }
@@ -34,8 +57,20 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
       // Test local environment (or the current server in production)
       console.log('Running local test with URL:', localTestUrl);
       try {
-        const localTest = await testEncodingConsistency(localTestUrl);
-        setLocalResults(localTest);
+        // Get browser-side encodings
+        const localEncodings = getLocalEncodings();
+        
+        // Get server-side encodings
+        const serverEncodings = await fetchServerEncodings(localTestUrl);
+        
+        // Compare encodings
+        const comparison = compareEncodings(localEncodings, serverEncodings);
+        
+        setLocalResults({
+          ...comparison,
+          localEncodings,
+          serverEncodings
+        });
       } catch (err) {
         console.error('Error running local tests:', err);
         setError((err as Error).message || 'Failed to run local encoding tests');
@@ -46,8 +81,20 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
         // Test production environment
         console.log('Running production test with URL:', productionUrl);
         try {
-          const productionTest = await testEncodingConsistency(productionUrl);
-          setProductionResults(productionTest);
+          // Get browser-side encodings
+          const localEncodings = getLocalEncodings();
+          
+          // Get server-side encodings
+          const serverEncodings = await fetchServerEncodings(`${productionUrl}/api/test-encoding`);
+          
+          // Compare encodings
+          const comparison = compareEncodings(localEncodings, serverEncodings);
+          
+          setProductionResults({
+            ...comparison,
+            localEncodings,
+            serverEncodings
+          });
         } catch (prodErr) {
           console.error('Error running production tests:', prodErr);
           // Don't fail completely if just the production test fails
