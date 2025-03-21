@@ -544,21 +544,46 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
 // Add a new endpoint for testing base64 encoding
 app.post('/api/test-encoding', (req: Request, res: Response) => {
   try {
+    console.log('Received test-encoding request');
+    console.log('Request body type:', typeof req.body);
+    console.log('Request body:', JSON.stringify(req.body).substring(0, 200));
+    
     const testData = req.body;
+    if (!testData || typeof testData !== 'object') {
+      console.error('Invalid request body:', testData);
+      return res.status(400).json({ 
+        error: 'Invalid request body, expected object',
+        received: typeof testData
+      });
+    }
+    
     const results: Record<string, string> = {};
     
     // Encode each test string to base64
     for (const [key, value] of Object.entries(testData)) {
+      console.log(`Processing key: ${key}, value type: ${typeof value}`);
       if (typeof value === 'string') {
-        // Node.js approach to base64 encoding with proper UTF-8 handling
-        results[key] = Buffer.from(value, 'utf-8').toString('base64');
+        try {
+          // Node.js approach to base64 encoding with proper UTF-8 handling
+          results[key] = Buffer.from(value, 'utf-8').toString('base64');
+        } catch (encodeError) {
+          console.error(`Error encoding value for key ${key}:`, encodeError);
+          results[key] = `ERROR: ${(encodeError as Error).message}`;
+        }
+      } else {
+        results[key] = `ERROR: Expected string value, got ${typeof value}`;
       }
     }
     
+    console.log('Encoding complete. Returning results.');
     res.json(results);
   } catch (error) {
     console.error('Error in encoding test endpoint:', error);
-    res.status(500).json({ error: 'Failed to encode test data' });
+    res.status(500).json({ 
+      error: 'Failed to encode test data', 
+      message: (error as Error).message,
+      stack: process.env.NODE_ENV !== 'production' ? (error as Error).stack : undefined
+    });
   }
 });
 
