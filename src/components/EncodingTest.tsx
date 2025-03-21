@@ -20,15 +20,41 @@ const EncodingTest: React.FC<EncodingTestProps> = ({
     setError(null);
     
     try {
-      // Test local environment
-      const localTest = await testEncodingConsistency(localUrl);
-      setLocalResults(localTest);
+      // Determine if we're in production
+      const isProduction = window.location.hostname !== 'localhost';
       
-      // Test production environment
-      const productionTest = await testEncodingConsistency(productionUrl);
-      setProductionResults(productionTest);
+      // For local environment testing
+      let localTestUrl = localUrl;
+      if (isProduction) {
+        // When running in production, use relative URLs for "local" test
+        localTestUrl = '/api/test-encoding';
+        console.log('Using relative URL for server test in production');
+      }
+      
+      // Test local environment (or the current server in production)
+      console.log('Running local test with URL:', localTestUrl);
+      try {
+        const localTest = await testEncodingConsistency(localTestUrl);
+        setLocalResults(localTest);
+      } catch (err) {
+        console.error('Error running local tests:', err);
+        setError((err as Error).message || 'Failed to run local encoding tests');
+      }
+      
+      // Only run production test if in dev mode and URLs are different
+      if (!isProduction && productionUrl !== localUrl) {
+        // Test production environment
+        console.log('Running production test with URL:', productionUrl);
+        try {
+          const productionTest = await testEncodingConsistency(productionUrl);
+          setProductionResults(productionTest);
+        } catch (prodErr) {
+          console.error('Error running production tests:', prodErr);
+          // Don't fail completely if just the production test fails
+        }
+      }
     } catch (err) {
-      setError((err as Error).message || 'Failed to run encoding tests');
+      setError('Failed to run encoding tests');
       console.error('Error running encoding tests:', err);
     } finally {
       setLoading(false);

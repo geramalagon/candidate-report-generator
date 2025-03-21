@@ -541,6 +541,27 @@ app.get('/api/test-api-key', async (req: Request, res: Response): Promise<void> 
   }
 });
 
+// Add a new endpoint for testing base64 encoding
+app.post('/api/test-encoding', (req: Request, res: Response) => {
+  try {
+    const testData = req.body;
+    const results: Record<string, string> = {};
+    
+    // Encode each test string to base64
+    for (const [key, value] of Object.entries(testData)) {
+      if (typeof value === 'string') {
+        // Node.js approach to base64 encoding with proper UTF-8 handling
+        results[key] = Buffer.from(value, 'utf-8').toString('base64');
+      }
+    }
+    
+    res.json(results);
+  } catch (error) {
+    console.error('Error in encoding test endpoint:', error);
+    res.status(500).json({ error: 'Failed to encode test data' });
+  }
+});
+
 // Global error handler for Express
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Unhandled server error:', err);

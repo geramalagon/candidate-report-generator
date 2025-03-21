@@ -31,7 +31,19 @@ export function getLocalEncodings(): Record<string, string> {
  */
 export async function getServerEncodings(apiUrl: string): Promise<Record<string, string>> {
   try {
-    const response = await fetch(`${apiUrl}/api/test-encoding`, {
+    // Construct a proper URL that works in both development and production
+    // If the URL already contains http:// or https://, use it as is
+    // Otherwise, assume it's a relative URL or path
+    let fullUrl = apiUrl;
+    if (!apiUrl.includes('/api/')) {
+      fullUrl = `${apiUrl}/api/test-encoding`;
+    } else {
+      fullUrl = apiUrl; // URL already contains the endpoint
+    }
+
+    console.log('Making encoding test request to:', fullUrl);
+    
+    const response = await fetch(fullUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
