@@ -1,0 +1,17 @@
+# Compiled output
+/dist
+/build
+
+# Node modules
+/node_modules
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Temporary files
+/tmp
+/uploads 
